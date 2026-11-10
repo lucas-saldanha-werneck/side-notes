@@ -18,7 +18,7 @@ const KEEP = 50
 const LOG_KEPT = 30
 // A note left unanswered goes away after this many new prompts.
 const CLEAR_AFTER_PROMPTS = 2
-// On the phone, a reply of only 1, 2 or 3 answers the note for this many prompts.
+// On the phone, a reply of only a number answers the note for this many prompts.
 const PHONE_ANSWER_PROMPTS = 5
 
 // A "Chat about it" prompt that never got an answer (the session was cleared
@@ -84,7 +84,10 @@ let stepCount = 0
 let chatTurn: 'none' | 'submitted' | 'running' = 'none'
 // The note Claude told on the phone. For the next phone prompts, a reply of
 // only 1, 2 or 3 answers it; any other reply lets it go, as the band does.
+// After 1 (learn more) the note is `explained`: the reply then picks one of
+// the four options the band shows under an explanation.
 let toldNote: Note | null = null
+let toldStage: 'offer' | 'explained' = 'offer'
 let toldPrompts = 0
 // Notes Claude was already asked to tell on the phone, by their text: a note
 // in the band that is not here yet goes with the next phone prompt.
@@ -99,6 +102,9 @@ let undoRow: LastAnswer | null = null
 
 const CODES = { '1': 'more', '2': 'knew', '3': 'dismissed' } as const
 type Answer = (typeof CODES)[keyof typeof CODES]
+// The same four buttons the band shows under an explanation, in the same order.
+const EXPLAINED_CODES = { '1': 'chat', '2': 'copy', '3': 'knew', '4': 'dismissed' } as const
+type ExplainedAnswer = (typeof EXPLAINED_CODES)[keyof typeof EXPLAINED_CODES]
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 
@@ -321,6 +327,13 @@ const phoneLines = (note: Note): string =>
     `Translate every label in these two lines into the language the person writes in: "${label(note)}", "learn more", "knew it" and "dismiss" (in Portuguese, for example: "${note.kind === 'check' ? 'Vale conferir' : 'Nota'}", "saber mais", "já sabia", "dispensar"). Keep the ✦, the numbers 1, 2, 3 and the note text as they are; the note is already in their language.`,
   ].join('\n')
 
+// The line that ends an explanation on the phone: the band's four buttons.
+const explainedLines = (): string =>
+  [
+    '"_1 chat about it · 2 copy · 3 got it · 4 dismiss_"',
+    'Translate the four labels in this line into the language the person writes in (in Portuguese, for example: "conversar sobre isso", "copiar", "entendi", "dispensar"). Keep the numbers 1, 2, 3, 4.',
+  ].join('\n')
+
 const phoneContext = (note: Note, isInTurn = false): string =>
   [
     'A side check (the side-notes plugin) found one thing the person may have missed. They read this chat on a phone (Remote Control), where the note above the prompt does not show, so you are the only way it reaches them.',
@@ -414,7 +427,38 @@ const answerContext = async ($: EngineInterface, note: Note, answer: Answer): Pr
     return `${lead} They dismissed this note; later notes keep coming (/${$.plugin.name} off stops them all). Say so in one short line, in their language.${undoHint}`
   }
   await recordAnswer($, note, 'more', prev, { isSent: true })
-  return [`${lead} They want to learn more: explain it in plain words, in their language, then chat about it if they want. The explanation:`, note.explanation === '' ? note.line : note.explanation].join('\n')
+  return [
+    `${lead} They want to learn more: explain it in plain words, in their language. The explanation:`,
+    note.explanation === '' ? note.line : note.explanation,
+    'End your reply with the line below, on its own:',
+    explainedLines(),
+  ].join('\n')
+}
+
+// A number sent after the explanation. The explanation already set the note
+// to `chat`, so Got it and Dismiss write over that status.
+const explainedContext = async ($: EngineInterface, note: Note, answer: ExplainedAnswer): Promise<string> => {
+  await logCheck($, -1, `phone answer after the explanation: ${answer}`).catch(() => undefined)
+  const lead = `The person's message is a code that answers the side note "${note.line}", which you explained.`
+  const undoHint = optionUndoMs > 0 ? ` Add that replying "undo" within ${undoMinutes()} minutes takes it back, all in their language (keep the word "undo", or use "desfazer" in Portuguese).` : ''
+  if (answer === 'chat') return `${lead} They want to chat about it: ask what they want to know about it, or go deeper where it matters most, in their language.`
+  if (answer === 'copy') {
+    return [
+      `${lead} They want to copy the note. The phone cannot reach the clipboard, so reply with only the note in one code block, exactly this text:`,
+      fullText(note),
+      'Then end your reply with the line below, on its own:',
+      explainedLines(),
+    ].join('\n')
+  }
+  if (answer === 'knew') {
+    const isKnownAdded = await remember($, 'knownTopics', note.topic)
+    await restoreStatus($, note, 'knew').catch(() => undefined)
+    await recordAnswer($, note, 'knew', 'chat', { isKnownAdded })
+    return `${lead} They got it; it will not come back. Say so in one short line, in their language.${undoHint}`
+  }
+  await restoreStatus($, note, 'dismissed').catch(() => undefined)
+  await recordAnswer($, note, 'dismissed', 'chat')
+  return `${lead} They dismissed this note; later notes keep coming (/${$.plugin.name} off stops them all). Say so in one short line, in their language.${undoHint}`
 }
 
 const undoContext = (r: UndoResult): string =>
@@ -588,6 +632,7 @@ export const register: Register = (on, options) => {
       const r = await undo($)
       if (r.note !== null) {
         toldNote = r.note
+        toldStage = 'offer'
         toldPrompts = 0
         toldLines.add(r.note.line)
       }
@@ -595,12 +640,24 @@ export const register: Register = (on, options) => {
     }
     if (kind === 'bridge' && toldNote !== null) {
       const note = toldNote
-      const code = /^\s*([123])\s*[.!]?\s*$/.exec(e.text ?? '')?.[1] as keyof typeof CODES | undefined
+      const digit = /^\s*([1-4])\s*[.!]?\s*$/.exec(e.text ?? '')?.[1]
       toldPrompts += 1
-      if (code !== undefined || toldPrompts >= PHONE_ANSWER_PROMPTS) toldNote = null
-      if (code !== undefined) {
-        if (view?.note.line === note.line) close($)
-        return next({ ...e, context: [...(e.context ?? []), await answerContext($, note, CODES[code])] })
+      if (toldStage === 'explained') {
+        const answer = digit === undefined ? undefined : EXPLAINED_CODES[digit as keyof typeof EXPLAINED_CODES]
+        // Copy keeps the options open, as the band does.
+        if (answer === 'copy') toldPrompts = 0
+        else if (answer !== undefined || toldPrompts >= PHONE_ANSWER_PROMPTS) toldNote = null
+        if (answer !== undefined) return next({ ...e, context: [...(e.context ?? []), await explainedContext($, note, answer)] })
+      } else {
+        const answer = digit === undefined || digit === '4' ? undefined : CODES[digit as keyof typeof CODES]
+        if (answer === 'more') {
+          toldStage = 'explained'
+          toldPrompts = 0
+        } else if (answer !== undefined || toldPrompts >= PHONE_ANSWER_PROMPTS) toldNote = null
+        if (answer !== undefined) {
+          if (view?.note.line === note.line) close($)
+          return next({ ...e, context: [...(e.context ?? []), await answerContext($, note, answer)] })
+        }
       }
     }
     // A note waiting for the phone, or any note in the band that Claude has not
@@ -612,6 +669,7 @@ export const register: Register = (on, options) => {
       const note = phoneNote
       remoteNoteToInject = null
       toldNote = note
+      toldStage = 'offer'
       toldPrompts = 0
       toldLines.add(note.line)
       await logCheck($, -1, waiting === note ? 'told on the phone' : 'told on the phone: the note in the band').catch(() => undefined)
@@ -650,6 +708,7 @@ export const register: Register = (on, options) => {
     if (note !== null) {
       remoteNoteToInject = null
       toldNote = note
+      toldStage = 'offer'
       toldPrompts = 0
       toldLines.add(note.line)
       await putFolder<PhoneWait>($, 'phoneWait', null).catch(() => undefined)

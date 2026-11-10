@@ -32,6 +32,15 @@ Reply with just the number. Reply `undo` (or `desfazer`) to take the answer back
 these labels in the language you write in, like the note: in Portuguese, for example,
 `✦ Vale conferir · ...` and `1 saber mais · 2 já sabia · 3 dispensar`.
 
+After `1`, the explanation ends with the same four choices the band shows under an explanation:
+
+```
+1 chat about it · 2 copy · 3 got it · 4 dismiss
+```
+
+Reply with just the number again. On the phone, Copy makes Claude send the note in a code block,
+because the mod cannot reach the phone's clipboard.
+
 Notes are written in the language you write in.
 
 ## Install
@@ -115,7 +124,7 @@ either `{"note": null}` or:
 
 `hooks/parse.ts` reads it. A `ui.render` hook on the band above the prompt draws the note. A
 `prompt.submit` hook tells which prompts come from the phone (origin `bridge`), adds the note to
-the next phone prompt's context and reads the `1`, `2`, `3` and `undo` replies. The `tool.call`
+the next phone prompt's context and reads the number and `undo` replies. The `tool.call`
 hook adds a chat pressed during a running task, or a note found during a phone-driven turn, to the
 next tool result, and `turn.complete` sends a chat that found no tool call as a prompt. The plugin store holds the
 data listed under Use.

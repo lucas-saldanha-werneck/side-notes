@@ -901,3 +901,62 @@ test('a fresh phone session in a folder with a restored note: the note is told, 
   const log = await $.command.run({ command: 'side-notes', args: 'log' } as never)
   expect(log.text).toContain('told on the phone: the note in the band')
 })
+
+// --- On the phone, after "1 learn more" -----------------------------------
+
+const AFTER_MORE = '1 chat about it · 2 copy · 3 got it · 4 dismiss'
+const listNotes = async ($: any): Promise<string> => (await $.command.run({ command: 'side-notes', args: '' } as never)).text
+
+test('on the phone, the explanation ends with four numbered options; 2 copies, 3 marks it as known, undo takes it back', async ($, on) => {
+  const { seen, forkPrompts } = await phoneUndoSetup($, on)
+  await phone($, '1')
+  expect(seen[2]).toContain('learn more')
+  expect(seen[2]).toContain(AFTER_MORE)
+  // Copy: the note in a code block, and the options stay open.
+  await phone($, '2')
+  expect(seen[3]).toContain('code block')
+  expect(seen[3]).toContain('only on this Mac')
+  expect(seen[3]).toContain(AFTER_MORE)
+  await phone($, '3')
+  expect(seen[4]).toContain('will not come back')
+  expect(await listNotes($)).toContain('· knew ·')
+  // The note is answered: a later number is a plain message.
+  await phone($, '4')
+  expect(seen[5]).toBe('[]')
+  await phone($, 'undo')
+  expect(seen[6]).toContain('Undone: \\"Knew it\\"')
+  expect(seen[6]).toContain('1 learn more')
+  await step($, 12)
+  for (let i = 0; i < 40; i++) await settle()
+  expect(knownPart(forkPrompts.at(-1) ?? '')).not.toContain('unpushed local build')
+})
+
+test('on the phone, after the explanation 4 dismisses the note', async ($, on) => {
+  const { seen } = await phoneUndoSetup($, on)
+  await phone($, '1')
+  await phone($, ' 4. ')
+  expect(seen[3]).toContain('dismissed this note')
+  expect(await listNotes($)).toContain('· dismissed ·')
+  await phone($, '3')
+  expect(seen[4]).toBe('[]')
+})
+
+test('on the phone, after the explanation 1 starts a chat about the note', async ($, on) => {
+  const { seen } = await phoneUndoSetup($, on)
+  await phone($, '1')
+  await phone($, '1')
+  expect(seen[3]).toContain('chat about')
+  expect(seen[3]).toContain('only on this Mac')
+  expect(seen[3]).not.toContain(AFTER_MORE)
+  expect(await listNotes($)).toContain('· chat ·')
+  await phone($, '3')
+  expect(seen[4]).toBe('[]')
+})
+
+test('on the phone, before the explanation a reply of 4 is a plain message', async ($, on) => {
+  const { seen } = await phoneUndoSetup($, on)
+  await phone($, '4')
+  expect(seen[2]).toBe('[]')
+  await phone($, '3')
+  expect(seen[3]).toContain('dismissed this note')
+})
