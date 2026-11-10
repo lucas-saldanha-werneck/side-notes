@@ -328,9 +328,10 @@ const phoneLines = (note: Note): string =>
   ].join('\n')
 
 // The line that ends an explanation on the phone: the band's four buttons.
+const EXPLAINED_LINE = '1 chat about it · 2 copy · 3 got it · 4 dismiss'
 const explainedLines = (): string =>
   [
-    '"_1 chat about it · 2 copy · 3 got it · 4 dismiss_"',
+    `"_${EXPLAINED_LINE}_"`,
     'Translate the four labels in this line into the language the person writes in (in Portuguese, for example: "conversar sobre isso", "copiar", "entendi", "dispensar"). Keep the numbers 1, 2, 3, 4.',
   ].join('\n')
 
@@ -439,7 +440,7 @@ const answerContext = async ($: EngineInterface, note: Note, answer: Answer): Pr
 // to `chat`, so Got it and Dismiss write over that status.
 const explainedContext = async ($: EngineInterface, note: Note, answer: ExplainedAnswer): Promise<string> => {
   await logCheck($, -1, `phone answer after the explanation: ${answer}`).catch(() => undefined)
-  const lead = `The person's message is a code that answers the side note "${note.line}", which you explained.`
+  const lead = `The person's message is a code that answers the side note "${note.line}", after its explanation.`
   const undoHint = optionUndoMs > 0 ? ` Add that replying "undo" within ${undoMinutes()} minutes takes it back, all in their language (keep the word "undo", or use "desfazer" in Portuguese).` : ''
   if (answer === 'chat') return `${lead} They want to chat about it: ask what they want to know about it, or go deeper where it matters most, in their language.`
   if (answer === 'copy') {
@@ -591,6 +592,15 @@ export const register: Register = (on, options) => {
 
   on('session.receive', async ($, e, next) => {
     await debugLog($, 'session.receive', e as unknown as Record<string, unknown>).catch(() => undefined)
+    // A slash command sent from the phone may not pass through prompt.submit:
+    // its origin is read here, so the command knows who asked.
+    const kind = (e as { origin?: { kind?: string } }).origin?.kind
+    if (kind === 'composer' || kind === 'sdk' || kind === 'bridge') {
+      const isRemote = kind === 'bridge'
+      if (!lastOriginSeen || isRemote !== isLastPromptRemote) await putFolder<boolean>($, 'remote', isRemote).catch(() => undefined)
+      isLastPromptRemote = isRemote
+      lastOriginSeen = true
+    }
     return next(e)
   })
 
@@ -863,6 +873,15 @@ export const register: Register = (on, options) => {
       if (saved === undefined) return { text: `No note #${arg}. /side-notes lists them.` }
       view = { kind: 'explained', note: saved.note, prompts: 0 }
       $.ui.invalidate('ui.render')
+      // From the phone the band does not show: the same four choices go in
+      // the text, and a reply of only the number answers the note.
+      if (await isRemoteDriven($)) {
+        toldNote = saved.note
+        toldStage = 'explained'
+        toldPrompts = 0
+        toldLines.add(saved.note.line)
+        return { text: [`#${saved.n} · ${clockTime(saved.at)} · ${folderName(saved.cwd)} · ${saved.status}`, '', fullText(saved.note), '', EXPLAINED_LINE, 'Reply with just the number.'].join('\n') }
+      }
       return { text: [`#${saved.n} · ${clockTime(saved.at)} · ${folderName(saved.cwd)} · ${saved.status}`, '', fullText(saved.note), '', 'The note is in the band above the prompt again: Chat about it, Copy, Got it, Dismiss.'].join('\n') }
     }
     if (list.length === 0) return { text: 'No side notes yet.' }

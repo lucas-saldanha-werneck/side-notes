@@ -960,3 +960,14 @@ test('on the phone, before the explanation a reply of 4 is a plain message', asy
   await phone($, '3')
   expect(seen[3]).toContain('dismissed this note')
 })
+
+test('on the phone, /side-notes <number> ends with the four numbered options and a number answers it right away', async ($, on) => {
+  const { seen } = await phoneUndoSetup($, on)
+  const opened = await $.command.run({ command: 'side-notes', args: '1' } as never)
+  expect(opened.text).toContain('Nothing was pushed')
+  expect(opened.text).toContain(AFTER_MORE)
+  expect(opened.text).not.toContain('above the prompt')
+  await phone($, '4')
+  expect(seen[2]).toContain('dismissed this note')
+  expect(await listNotes($)).toContain('· dismissed ·')
+})

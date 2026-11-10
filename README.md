@@ -40,6 +40,8 @@ After `1`, the explanation ends with the same four choices the band shows under 
 
 Reply with just the number again. On the phone, Copy makes Claude send the note in a code block,
 because the mod cannot reach the phone's clipboard.
+`/side-notes <number>` sent from the phone ends with the same line, and a reply of just the number
+answers that note.
 
 Notes are written in the language you write in.
 
