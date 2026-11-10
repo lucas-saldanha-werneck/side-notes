@@ -1,0 +1,39 @@
+{
+  "name": "side-notes",
+  "version": "0.1.0",
+  "description": "Every few steps a side check looks for one thing you may have missed and shows it as a short note above the prompt.",
+  "author": {
+    "name": "Lucas Saldanha Werneck",
+    "url": "https://github.com/lucas-saldanha-werneck"
+  },
+  "homepage": "https://github.com/lucas-saldanha-werneck/side-notes",
+  "repository": "https://github.com/lucas-saldanha-werneck/side-notes",
+  "license": "MIT",
+  "keywords": [
+    "mod",
+    "notes",
+    "review",
+    "desktop",
+    "remote-control"
+  ],
+  "userConfig": {
+    "check_every": {
+      "type": "number",
+      "title": "Check every N steps",
+      "description": "How many main-agent steps between two side checks. Default 6. /side-notes every <n> wins over this.",
+      "default": 6
+    },
+    "run_in_terminal": {
+      "type": "boolean",
+      "title": "Also run in the terminal",
+      "description": "Run the side check in terminal sessions too. Off by default: the mod is meant for the desktop app and the phone.",
+      "default": false
+    },
+    "undo_minutes": {
+      "type": "number",
+      "title": "Undo window (minutes)",
+      "description": "How long an answer to a note (Knew it, Dismiss, Learn more, Chat about it, or 1/2/3 on the phone) can be taken back. Default 5. 0 turns undo off.",
+      "default": 5
+    }
+  }
+}

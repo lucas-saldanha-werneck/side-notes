@@ -1,0 +1,15 @@
+{
+  "name": "side-notes",
+  "description": "Short side notes about things you may have missed, for the Claude Code desktop app and the phone.",
+  "owner": {
+    "name": "Lucas Saldanha Werneck",
+    "url": "https://github.com/lucas-saldanha-werneck"
+  },
+  "plugins": [
+    {
+      "name": "side-notes",
+      "source": "./",
+      "description": "A short note above the prompt about one thing you may have missed."
+    }
+  ]
+}

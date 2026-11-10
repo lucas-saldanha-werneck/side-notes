@@ -1,0 +1,761 @@
+import type { EngineInterface, Register } from 'claude-code'
+
+import { isRepeat, KIND_LABEL, readReply } from './parse'
+import type { Note } from './parse'
+import { checkPrompt } from './prompt'
+
+// side-notes: every few main-agent steps a one-shot side request (a fork of the
+// conversation, no tools) looks for one thing the person may have missed. The
+// note shows in the band above the prompt; on the phone (Remote Control) the
+// main agent relays it and a reply of 1, 2 or 3 answers it.
+// By default it runs only where the session draws on `desktop` and not in a
+// terminal; the `run_in_terminal` option turns it on there too.
+
+const DEFAULT_EVERY = 6
+const MIN_EVERY = 2
+const MAX_EVERY = 100
+const KEEP = 50
+const LOG_KEPT = 30
+// A note left unanswered goes away after this many new prompts.
+const CLEAR_AFTER_PROMPTS = 2
+// On the phone, a reply of only 1, 2 or 3 answers the note for this many prompts.
+const PHONE_ANSWER_PROMPTS = 5
+
+// A "Chat about it" prompt that never got an answer (the session was cleared
+// right after) is handed to the next session in the same folder for this long,
+// and at most this many times.
+const LOST_CHAT_MAX_AGE_MS = 45 * 60_000
+const LOST_CHAT_TRIES = 2
+// A note waiting for the next phone prompt survives a clear or a reload this long.
+const PHONE_NOTE_MAX_AGE_MS = 3 * 60 * 60_000
+// Every note shown is kept whole, so `/side-notes` can list it and open it again.
+const NOTES_KEPT = 40
+// A note left unanswered comes back in the band of the session that follows a clear.
+const RESTORE_MAX_AGE_MS = 60 * 60_000
+
+// How long an answer to a note can be taken back, by default.
+const DEFAULT_UNDO_MINUTES = 5
+const MAX_UNDO_MINUTES = 120
+
+type View = { kind: 'offer' | 'explained'; note: Note; prompts: number }
+// The last answer given to a note in a folder, kept in $.store so a reload or
+// a clear does not lose it. `isSent`: what the answer sent into the main
+// session (a chat, or the explanation on the phone) cannot be taken back.
+type AnswerKind = 'knew' | 'dismissed' | 'more' | 'chat' | 'off'
+type LastAnswer = {
+  at: number
+  note: Note
+  answer: AnswerKind
+  prevStatus: NoteStatus
+  isKnownAdded: boolean
+  wasOff: boolean
+  isSent: boolean
+}
+type Check = { at: string; session: string; step: number; outcome: string }
+// Kept in $.store per folder, so a clear or a reload does not lose them.
+type PendingChat = { text: string; at: number; session: string; tries: number }
+type PhoneWait = { note: Note; at: number }
+type NoteStatus = 'shown' | 'knew' | 'dismissed' | 'expired' | 'chat'
+type Saved = { n: number; at: number; session: string; cwd: string; note: Note; status: NoteStatus }
+
+let view: View | null = null
+// A main-agent turn is running: a chat waits for the next tool result to enter it.
+let isTurnRunning = false
+// The chat text that enters the running turn with the next tool result.
+let chatToInject: string | null = null
+// Notes that came back after a clear and wait their turn in the band, newest first.
+let queue: Note[] = []
+let isChecking = false
+// Remote Control (the phone app, claude.ai) draws no mod. When the last prompt
+// came from there, the note waits for the next prompt from there, and Claude
+// opens its reply with it.
+let isLastPromptRemote = false
+// A note found while a phone-driven turn runs: it enters that turn with the
+// next tool result, so Claude tells it in this reply, not one prompt later.
+let remoteNoteToInject: Note | null = null
+// Whether this process has seen one of the person's prompts yet.
+let lastOriginSeen = false
+// The chat prompt's own turn: 'submitted' at prompt.submit, 'running' at
+// turn.start; an answered turn.complete clears the pending chat.
+let chatTurn: 'none' | 'submitted' | 'running' = 'none'
+// The note Claude told on the phone. For the next phone prompts, a reply of
+// only 1, 2 or 3 answers it; any other reply lets it go, as the band does.
+let toldNote: Note | null = null
+let toldPrompts = 0
+// Options from /config, read at register.
+let optionEvery = DEFAULT_EVERY
+let optionTerminal = false
+let optionUndoMs = DEFAULT_UNDO_MINUTES * 60_000
+// The band shows an Undo row for the last answer until the next prompt, Close,
+// or the end of the undo window.
+let undoRow: LastAnswer | null = null
+
+const CODES = { '1': 'more', '2': 'knew', '3': 'off' } as const
+type Answer = (typeof CODES)[keyof typeof CODES]
+
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+
+const clampEvery = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v.trim()) : NaN
+  return Number.isInteger(n) && n >= MIN_EVERY && n <= MAX_EVERY ? n : null
+}
+
+// `/side-notes every <n>` wins over the option in /config.
+const checkEvery = async ($: EngineInterface): Promise<number> => clampEvery(await $.store.get('every')) ?? optionEvery
+
+// Resolves true when the topic was new and got added.
+const remember = async ($: EngineInterface, key: 'shownTopics' | 'knownTopics', topic: string): Promise<boolean> => {
+  const list = strings(await $.store.get(key))
+  if (isRepeat({ topic, line: topic, kind: 'fyi', explanation: '' }, list)) return false
+  await $.store.set(key, [...list, topic].slice(-KEEP))
+  return true
+}
+
+const forget = async ($: EngineInterface, key: 'shownTopics' | 'knownTopics', topic: string): Promise<void> => {
+  const list = strings(await $.store.get(key))
+  await $.store.set(key, list.filter(t => t !== topic))
+}
+
+const logCheck = async ($: EngineInterface, step: number, outcome: string): Promise<void> => {
+  const entry: Check = { at: new Date().toISOString(), session: await $.session.id(), step, outcome }
+  const log = (await $.store.get('checkLog')) as Check[] | undefined
+  await $.store.set('checkLog', [...(Array.isArray(log) ? log : []), entry].slice(-LOG_KEPT))
+}
+
+const shouldRunHere = async ($: EngineInterface): Promise<boolean> => {
+  const surfaces = await $.session.surfaces()
+  if (optionTerminal) return true
+  return surfaces.includes('desktop') && !surfaces.includes('terminal')
+}
+
+// The session is driven from the phone: the person's last prompt came over
+// the Remote Control bridge. Before any prompt in this process (a reload, a
+// clear), the last origin saved for the folder decides.
+const isRemoteDriven = async ($: EngineInterface): Promise<boolean> => {
+  if (lastOriginSeen) return isLastPromptRemote
+  const saved = (await byFolder<boolean>($, 'remote').catch(() => ({}) as Record<string, boolean>))[await $.session.cwd()]
+  return saved === true
+}
+
+const isOff = async ($: EngineInterface): Promise<boolean> => (await $.store.get('off')) === true
+
+type FolderKey = 'pendingChat' | 'phoneWait' | 'lastAnswer' | 'remote'
+
+const byFolder = async <T,>($: EngineInterface, key: FolderKey): Promise<Record<string, T>> => {
+  const v = await $.store.get(key)
+  return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, T>) : {}
+}
+
+const putFolder = async <T,>($: EngineInterface, key: FolderKey, value: T | null): Promise<void> => {
+  const cwd = await $.session.cwd()
+  const all = { ...(await byFolder<T>($, key)) }
+  if (value === null) delete all[cwd]
+  else all[cwd] = value
+  await $.store.set(key, all)
+}
+
+// The chat prompt of a session that was cleared before it answered, if this
+// session is the one that came after it: a newer session in the same folder.
+const takeLostChat = async ($: EngineInterface): Promise<PendingChat | null> => {
+  const cwd = await $.session.cwd()
+  const p = (await byFolder<PendingChat>($, 'pendingChat'))[cwd]
+  if (p === undefined) return null
+  const now = await $.clock.now()
+  if (now - p.at > LOST_CHAT_MAX_AGE_MS || p.tries >= LOST_CHAT_TRIES) {
+    await putFolder<PendingChat>($, 'pendingChat', null)
+    return null
+  }
+  const session = await $.session.id()
+  if (p.session === session) return null
+  // A session that began before the chat was sent is another one open in the
+  // same folder, not the one that followed the clear.
+  if ((await $.session.usage()).startedAt < p.at - 5_000) return null
+  await putFolder<PendingChat>($, 'pendingChat', { ...p, session, tries: p.tries + 1 })
+  return p
+}
+
+const lostChatContext = (p: PendingChat): string =>
+  [
+    'Before the session was cleared, the person pressed "Chat about it" on a side note, and that message never got an answer. Handle the message above first; then, in the same reply, do what that lost message asked:',
+    p.text,
+  ].join('\n\n')
+
+const takePhoneNote = async ($: EngineInterface): Promise<Note | null> => {
+  const w = (await byFolder<PhoneWait>($, 'phoneWait'))[await $.session.cwd()]
+  if (w === undefined) return null
+  await putFolder<PhoneWait>($, 'phoneWait', null)
+  return (await $.clock.now()) - w.at > PHONE_NOTE_MAX_AGE_MS ? null : w.note
+}
+
+const savedNotes = async ($: EngineInterface): Promise<Saved[]> => {
+  const v = await $.store.get('notes')
+  return Array.isArray(v) ? (v as Saved[]) : []
+}
+
+const saveNote = async ($: EngineInterface, note: Note): Promise<void> => {
+  const list = await savedNotes($)
+  const n = (list.at(-1)?.n ?? 0) + 1
+  const saved: Saved = { n, at: await $.clock.now(), session: await $.session.id(), cwd: await $.session.cwd(), note, status: 'shown' }
+  await $.store.set('notes', [...list, saved].slice(-NOTES_KEPT))
+}
+
+// Only a note still open changes: a later answer never overwrites knew or chat.
+// Resolves the status the note had before, or null when none changed.
+const setStatus = async ($: EngineInterface, note: Note, status: NoteStatus): Promise<NoteStatus | null> => {
+  const list = await savedNotes($)
+  let prev: NoteStatus | null = null
+  const next = list.map(t => {
+    if (prev !== null || t.note.line !== note.line || (t.status !== 'shown' && t.status !== 'expired')) return t
+    prev = t.status
+    return { ...t, status }
+  })
+  if (prev !== null) await $.store.set('notes', next)
+  return prev
+}
+
+// Undo: the newest saved copy of the note gets its earlier status back.
+const restoreStatus = async ($: EngineInterface, note: Note, status: NoteStatus): Promise<void> => {
+  const list = await savedNotes($)
+  const i = list.map(t => t.note.line).lastIndexOf(note.line)
+  if (i === -1) return
+  await $.store.set('notes', list.map((t, k) => (k === i ? { ...t, status } : t)))
+}
+
+// The notes of this folder that nobody answered, shown by an earlier session
+// (one that was cleared or closed) less than an hour ago, newest first.
+const openNotes = async ($: EngineInterface): Promise<Saved[]> => {
+  const cwd = await $.session.cwd()
+  const session = await $.session.id()
+  const now = await $.clock.now()
+  return (await savedNotes($))
+    // A note pushed out by prompts (expired) was never answered either.
+    .filter(t => t.cwd === cwd && (t.status === 'shown' || t.status === 'expired') && t.session !== session && now - t.at <= RESTORE_MAX_AGE_MS)
+    .reverse()
+}
+
+const folderName = (cwd: string): string => cwd.split('/').filter(s => s !== '').at(-1) ?? cwd
+
+const clockTime = (ms: number): string => {
+  const d = new Date(ms)
+  const two = (x: number) => String(x).padStart(2, '0')
+  return `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`
+}
+
+const label = (note: Note): string => KIND_LABEL[note.kind] ?? KIND_LABEL.fyi
+
+const check = async ($: EngineInterface, step: number): Promise<void> => {
+  isChecking = true
+  let outcome = 'error'
+  try {
+    if (await isOff($)) {
+      outcome = 'off'
+      return
+    }
+    const shown = strings(await $.store.get('shownTopics'))
+    const known = strings(await $.store.get('knownTopics'))
+    const r = await $.model.fork({ prompt: checkPrompt(shown, known) })
+    if (!r.isAnswered) {
+      outcome = `no answer: ${r.reason}`
+      return
+    }
+    const reading = readReply(r.text)
+    if (!('note' in reading)) {
+      // {"note": null} is the usual answer; anything else is a reply the parser missed.
+      outcome = 'isNothing' in reading ? 'none' : `unread reply: ${r.text.slice(0, 120).replace(/\s+/g, ' ')}`
+      return
+    }
+    const note = reading.note
+    if (isRepeat(note, [...shown, ...known])) {
+      outcome = 'repeat'
+      return
+    }
+    await remember($, 'shownTopics', note.topic)
+    await saveNote($, note)
+    view = { kind: 'offer', note, prompts: 0 }
+    $.ui.invalidate('ui.render')
+    outcome = 'shown'
+    if (await isRemoteDriven($)) {
+      // Kept for the next phone prompt too, in case the turn makes no more tool calls.
+      await putFolder<PhoneWait>($, 'phoneWait', { note, at: await $.clock.now() })
+      if (isTurnRunning) {
+        remoteNoteToInject = note
+        outcome = 'shown; enters the running phone turn at its next tool result'
+      } else outcome = 'shown; waits for the next phone prompt'
+    }
+  } catch (err) {
+    outcome = `error: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`
+  } finally {
+    isChecking = false
+    await logCheck($, step, outcome).catch(() => undefined)
+  }
+}
+
+const phoneContext = (note: Note, isInTurn = false): string =>
+  [
+    'A side check (the side-notes plugin) found one thing the person may have missed. They read this chat on a phone (Remote Control), where the note above the prompt does not show, so you are the only way it reaches them.',
+    isInTurn
+      ? 'Finish the step you are on and go on with the task. When you write your reply to the person at the end of this turn, start it with these two lines, each on its own, written in the language the person writes in (keep the numbers):'
+      : 'Start your reply with these two lines, each on its own, written in the language the person writes in (keep the numbers), then answer their message as usual:',
+    `"✦ ${label(note)} · ${note.line}"`,
+    '"_1 learn more · 2 knew it · 3 turn off_"',
+    'Do not explain the note unless they ask for it.',
+  ].join('\n')
+
+const ANSWER_LABEL: Record<AnswerKind, string> = {
+  knew: 'Knew it',
+  dismissed: 'Dismissed',
+  more: 'Learn more',
+  chat: 'Chat about it',
+  off: 'Turned off',
+}
+
+const undoMinutes = (): number => Math.round(optionUndoMs / 60_000)
+
+// Keeps what an answer changed, so /side-notes undo (or the band's Undo, or
+// "undo" on the phone) can take it back within the undo window.
+const recordAnswer = async ($: EngineInterface, note: Note, answer: AnswerKind, prev: NoteStatus | null, extra: Partial<LastAnswer> = {}): Promise<void> => {
+  if (optionUndoMs <= 0) return
+  const rec: LastAnswer = { at: await $.clock.now(), note, answer, prevStatus: prev ?? 'shown', isKnownAdded: false, wasOff: false, isSent: false, ...extra }
+  await putFolder<LastAnswer>($, 'lastAnswer', rec)
+  undoRow = rec
+  $.ui.invalidate('ui.render')
+}
+
+const lastAnswer = async ($: EngineInterface): Promise<LastAnswer | null> => (await byFolder<LastAnswer>($, 'lastAnswer'))[await $.session.cwd()] ?? null
+
+// The chat of the last answer reached the main session after all.
+const markSent = async ($: EngineInterface): Promise<void> => {
+  const rec = await lastAnswer($)
+  if (rec === null || rec.answer !== 'chat' || rec.isSent) return
+  await putFolder<LastAnswer>($, 'lastAnswer', { ...rec, isSent: true })
+  if (undoRow !== null && undoRow.at === rec.at) undoRow = { ...undoRow, isSent: true }
+}
+
+type UndoResult = { text: string; note: Note | null }
+
+const undo = async ($: EngineInterface): Promise<UndoResult> => {
+  const rec = await lastAnswer($)
+  if (rec === null) return { text: 'Nothing to undo.', note: null }
+  const now = await $.clock.now()
+  if (now - rec.at > optionUndoMs) {
+    await putFolder<LastAnswer>($, 'lastAnswer', null)
+    undoRow = null
+    $.ui.invalidate('ui.render')
+    return { text: `Too late to undo: an answer can be taken back for ${undoMinutes()} minutes.`, note: null }
+  }
+  const { note } = rec
+  if (rec.answer === 'knew' && rec.isKnownAdded) await forget($, 'knownTopics', note.topic)
+  if (rec.answer === 'off') await $.store.set('off', rec.wasOff)
+  let isChatStopped = false
+  if (rec.answer === 'chat') {
+    if (chatToInject !== null) {
+      chatToInject = null
+      isChatStopped = true
+    }
+    if (!rec.isSent) await putFolder<PendingChat>($, 'pendingChat', null)
+  }
+  await restoreStatus($, note, rec.prevStatus)
+  // The note goes back in the band as it was offered; a note showing there now
+  // waits its turn behind it.
+  if (view !== null && view.note.line !== note.line) queue.unshift(view.note)
+  view = { kind: 'offer', note, prompts: 0 }
+  undoRow = null
+  await putFolder<LastAnswer>($, 'lastAnswer', null)
+  $.ui.invalidate('ui.render')
+  await logCheck($, -1, `undo: ${rec.answer}`).catch(() => undefined)
+  const parts = [`Undone: "${ANSWER_LABEL[rec.answer]}" on "${note.line}". The note is back above the prompt.`]
+  if (rec.answer === 'knew' && rec.isKnownAdded) parts.push('It is no longer marked as known.')
+  if (rec.answer === 'off') parts.push(rec.wasOff ? 'Side notes stay off.' : 'Side notes are on again.')
+  if (rec.answer === 'chat' && rec.isSent) parts.push('The chat message had already been sent to the session, so that part cannot be taken back.')
+  if (rec.answer === 'chat' && isChatStopped) parts.push('The chat message had not reached the session yet and will not be sent.')
+  if (rec.answer === 'more' && rec.isSent) parts.push('The explanation was already given in the chat, so that part cannot be taken back.')
+  return { text: parts.join(' '), note }
+}
+
+const answerContext = async ($: EngineInterface, note: Note, answer: Answer): Promise<string> => {
+  await logCheck($, -1, `phone answer: ${answer}`).catch(() => undefined)
+  const prev = await setStatus($, note, answer === 'knew' ? 'knew' : answer === 'off' ? 'dismissed' : 'chat').catch(() => null)
+  const lead = `The person's message is a code that answers the side note "${note.line}".`
+  const undoHint = optionUndoMs > 0 ? ` Add that replying "undo" within ${undoMinutes()} minutes takes it back.` : ''
+  if (answer === 'knew') {
+    const isKnownAdded = await remember($, 'knownTopics', note.topic)
+    await recordAnswer($, note, 'knew', prev, { isKnownAdded })
+    return `${lead} They knew it already; it will not come back. Say so in one short line, in their language.${undoHint}`
+  }
+  if (answer === 'off') {
+    const wasOff = await isOff($)
+    await $.store.set('off', true)
+    await recordAnswer($, note, 'off', prev, { wasOff })
+    return `${lead} They turned side notes off. Say so in one short line, in their language, and that /${$.plugin.name} on turns them back on.${undoHint}`
+  }
+  await recordAnswer($, note, 'more', prev, { isSent: true })
+  return [`${lead} They want to learn more: explain it in plain words, in their language, then chat about it if they want. The explanation:`, note.explanation === '' ? note.line : note.explanation].join('\n')
+}
+
+const undoContext = (r: UndoResult): string =>
+  [
+    `The side-notes plugin read the person's message as taking back their last answer to a side note. Result: ${r.text}`,
+    'Say so in one short line, in their language.',
+    r.note === null ? '' : `Then show the note again with these two lines, each on its own, in their language (keep the numbers):\n"✦ ${label(r.note)} · ${r.note.line}"\n"_1 learn more · 2 knew it · 3 turn off_"`,
+    'If their message clearly meant something else, also answer it as usual.',
+  ]
+    .filter(s => s !== '')
+    .join('\n')
+
+// Closing a note shows the next one waiting, if any. With an answer, the
+// answer is saved for undo.
+const close = ($: EngineInterface, answer?: AnswerKind | 'expired'): void => {
+  const note = view?.note
+  const next = queue.shift()
+  view = next === undefined ? null : { kind: 'offer', note: next, prompts: 0 }
+  $.ui.invalidate('ui.render')
+  if (note === undefined || answer === undefined) return
+  if (answer === 'expired') {
+    void setStatus($, note, 'expired').catch(() => undefined)
+    return
+  }
+  if (answer === 'dismissed') void setStatus($, note, 'dismissed').then(prev => recordAnswer($, note, 'dismissed', prev)).catch(() => undefined)
+}
+
+const knew = async ($: EngineInterface, note: Note): Promise<void> => {
+  const isKnownAdded = await remember($, 'knownTopics', note.topic)
+  close($)
+  const prev = await setStatus($, note, 'knew').catch(() => null)
+  await recordAnswer($, note, 'knew', prev, { isKnownAdded })
+}
+
+const learnMore = async ($: EngineInterface, shown: View): Promise<void> => {
+  view = { ...shown, kind: 'explained' }
+  $.ui.invalidate('ui.render')
+  await recordAnswer($, shown.note, 'more', 'shown')
+}
+
+const fullText = (note: Note): string => [`${label(note)} · ${note.line}`, note.explanation].filter(s => s !== '').join('\n\n')
+
+// "Chat about it": the note goes into the session as a turn of its own, so the
+// talk about it stays in the main chat. It is kept as pending until its turn
+// answers: when a clear lands first, the next session gets it. A plugin's
+// prompt waits until the session is idle, which in a long task can take many
+// minutes, so while a turn runs the chat enters that turn with the next tool
+// result instead.
+const chat = async ($: EngineInterface, note: Note): Promise<void> => {
+  close($)
+  const prev = await setStatus($, note, 'chat').catch(() => null)
+  await recordAnswer($, note, 'chat', prev, { isSent: !isTurnRunning })
+  const text = [`A side note came up: "${note.line}".`, note.explanation === '' ? '' : `Its explanation:\n${note.explanation}`, 'Explain it in plain words, then chat about it with me.']
+    .filter(s => s !== '')
+    .join('\n\n')
+  await putFolder<PendingChat>($, 'pendingChat', { text, at: await $.clock.now(), session: await $.session.id(), tries: 1 })
+  if (isTurnRunning) {
+    chatToInject = text
+    await logCheck($, -1, 'chat waits for the next tool result').catch(() => undefined)
+    await $.ui.toast('The note goes into the running task at its next step.')
+    return
+  }
+  await submitChat($, text)
+}
+
+const submitChat = async ($: EngineInterface, text: string): Promise<void> => {
+  await logCheck($, -1, 'chat sent').catch(() => undefined)
+  chatTurn = 'submitted'
+  await $.prompt.submit({ text }).catch(err => $.ui.toast(`Could not send: ${String(err instanceof Error ? err.message : err).slice(0, 120)}`))
+}
+
+const injectedChat = (text: string): string =>
+  [
+    'While you worked, the person pressed "Chat about it" on a side note. Their message:',
+    text,
+    'Finish the step you are on. Then answer this message in your reply to the person, at the top, before anything else in that reply. Do not drop it, even if you clear or save the session next.',
+  ].join('\n\n')
+
+// The band's text cannot be selected in the app, so a button copies it.
+const copy = async ($: EngineInterface, note: Note, surface: string): Promise<void> => {
+  const r = await $.ui.copy({ text: fullText(note), surface: surface as Parameters<EngineInterface['ui']['copy']>[0]['surface'] })
+  await $.ui.toast(r.isCopied ? 'Note copied.' : `Could not copy: ${r.reason}`)
+}
+
+export const register: Register = (on, options) => {
+  optionEvery = clampEvery(options?.check_every) ?? DEFAULT_EVERY
+  optionTerminal = options?.run_in_terminal === true
+  const minutes = typeof options?.undo_minutes === 'number' && options.undo_minutes >= 0 ? Math.min(options.undo_minutes, MAX_UNDO_MINUTES) : DEFAULT_UNDO_MINUTES
+  optionUndoMs = minutes * 60_000
+
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'side-notes',
+      description: 'List the last side notes; a number opens one again; undo takes back your last answer; log shows the checks; on|off; every <n> sets how often it checks',
+      argumentHint: '[number|undo|log|on|off|every <n>]',
+    })
+    // An answer still inside its undo window keeps its Undo row after a reload or a clear.
+    const rec = await lastAnswer($).catch(() => null)
+    if (rec !== null && (await $.clock.now()) - rec.at <= optionUndoMs) {
+      undoRow = rec
+      $.ui.invalidate('ui.render')
+    }
+    // A clear used to wipe a note nobody had answered yet: it comes back here.
+    // A clear may start a new process (the band empty) or keep this one: either
+    // way the notes show, the newest first and the others one after another.
+    const open = await openNotes($).catch(() => [] as Saved[])
+    const [first, ...rest] = open
+    if (first !== undefined) {
+      view = { kind: 'offer', note: first.note, prompts: 0 }
+      queue = rest.map(t => t.note)
+      $.ui.invalidate('ui.render')
+      await logCheck($, -1, `shown again after a clear: ${open.map(t => `#${t.n}`).join(', ')}`).catch(() => undefined)
+    }
+    return next(e)
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined && e.index > 0 && view === null && !isChecking) {
+      const every = await checkEvery($)
+      // The app, or any session driven from the phone (a terminal with Remote
+      // Control included): the band does not show there, Claude tells the note.
+      if (e.index % every === 0 && ((await shouldRunHere($)) || (await isRemoteDriven($)))) void check($, e.index)
+    }
+    return yield* next(e)
+  })
+
+  on('prompt.submit', async ($, e0, next) => {
+    const origin = e0.origin
+    const kind = origin?.kind
+    // Our own "Chat about it" prompt: watch its turn.
+    if (kind === 'plugin' && origin !== undefined && 'name' in origin && origin.name === $.plugin.name) {
+      chatTurn = 'submitted'
+      return next(e0)
+    }
+    // Any other prompt in a session that followed a clear picks up a chat the
+    // clear swallowed.
+    let e = e0
+    const lost = await takeLostChat($).catch(() => null)
+    if (lost !== null) {
+      chatTurn = 'submitted'
+      await logCheck($, -1, 'lost chat handed to the next session').catch(() => undefined)
+      e = { ...e, context: [...(e.context ?? []), lostChatContext(lost)] }
+    }
+    // In the app, what you type on the computer arrives as `sdk`; from the phone, as `bridge`.
+    if (kind === 'composer' || kind === 'sdk' || kind === 'bridge') {
+      const isRemote = kind === 'bridge'
+      if (!lastOriginSeen || isRemote !== isLastPromptRemote) await putFolder<boolean>($, 'remote', isRemote).catch(() => undefined)
+      isLastPromptRemote = isRemote
+      lastOriginSeen = true
+      // A note waiting for the running phone turn is told with this prompt instead.
+      if (!isRemote) remoteNoteToInject = null
+    }
+    // On the phone, a reply of only "undo" (or "desfazer") takes back the last
+    // answer while its window is open. With nothing to undo it is a plain message.
+    if (kind === 'bridge' && /^\s*(undo|desfazer|desfaz)\s*[.!]?\s*$/i.test(e.text ?? '') && (await lastAnswer($).catch(() => null)) !== null) {
+      const r = await undo($)
+      if (r.note !== null) {
+        toldNote = r.note
+        toldPrompts = 0
+      }
+      return next({ ...e, context: [...(e.context ?? []), undoContext(r)] })
+    }
+    if (kind === 'bridge' && toldNote !== null) {
+      const note = toldNote
+      const code = /^\s*([123])\s*[.!]?\s*$/.exec(e.text ?? '')?.[1] as keyof typeof CODES | undefined
+      toldPrompts += 1
+      if (code !== undefined || toldPrompts >= PHONE_ANSWER_PROMPTS) toldNote = null
+      if (code !== undefined) {
+        if (view?.note === note) close($)
+        return next({ ...e, context: [...(e.context ?? []), await answerContext($, note, CODES[code])] })
+      }
+    }
+    const phoneNote = kind === 'bridge' ? await takePhoneNote($).catch(() => null) : null
+    if (phoneNote !== null) {
+      const note = phoneNote
+      remoteNoteToInject = null
+      toldNote = note
+      toldPrompts = 0
+      await logCheck($, -1, 'told on the phone').catch(() => undefined)
+      return next({ ...e, context: [...(e.context ?? []), phoneContext(note)] })
+    }
+    // Only the person's own prompts count, not a prompt from another plugin.
+    // A prompt also takes the Undo row away (/side-notes undo still works).
+    if (undoRow !== null && (kind === 'composer' || kind === 'sdk' || kind === 'bridge')) {
+      undoRow = null
+      $.ui.invalidate('ui.render')
+    }
+    if (view !== null && (kind === 'composer' || kind === 'sdk' || kind === 'bridge')) {
+      view = { ...view, prompts: view.prompts + 1 }
+      if (view.prompts >= CLEAR_AFTER_PROMPTS) close($, 'expired')
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      isTurnRunning = true
+      if (chatTurn === 'submitted') chatTurn = 'running'
+    }
+    return next(e)
+  })
+
+  // A chat pressed while the turn runs reaches the model with the next tool
+  // result of the main loop, so it does not wait for the whole task to end.
+  // A note found during a phone-driven turn enters it the same way.
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    const text = chatToInject
+    const note = remoteNoteToInject
+    if ((text === null && note === null) || e.agentId !== undefined || !('result' in r) || r.result === undefined) return r
+    const added: string[] = []
+    if (note !== null) {
+      remoteNoteToInject = null
+      toldNote = note
+      toldPrompts = 0
+      await putFolder<PhoneWait>($, 'phoneWait', null).catch(() => undefined)
+      await logCheck($, -1, 'told on the phone, in the running turn').catch(() => undefined)
+      added.push(phoneContext(note, true))
+    }
+    if (text !== null) {
+      chatToInject = null
+      chatTurn = 'running'
+      await markSent($).catch(() => undefined)
+      await logCheck($, -1, 'chat entered the running turn').catch(() => undefined)
+      added.push(injectedChat(text))
+    }
+    return { ...r, context: [...(r.context ?? []), ...added] }
+  })
+
+  // The chat got its answer: nothing is pending any more. An interrupted or
+  // failed turn keeps it, so the session after a clear still gets it.
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined) return r
+    isTurnRunning = false
+    // A phone note the turn had no tool call left to carry waits for the next phone prompt.
+    remoteNoteToInject = null
+    // The turn ended with no tool call after the chat: send it as a prompt now.
+    const waiting = chatToInject
+    if (waiting !== null) {
+      chatToInject = null
+      void markSent($)
+        .then(() => submitChat($, waiting))
+        .catch(() => undefined)
+      return r
+    }
+    if (chatTurn === 'running') {
+      chatTurn = 'none'
+      if (e.reason === 'answer') await putFolder<PendingChat>($, 'pendingChat', null).catch(() => undefined)
+    }
+    return r
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const shown = view
+    if (e.props.hasSurvey || (e.surface === 'terminal' && !optionTerminal)) return next(e)
+    const row = undoRow !== null && (await $.clock.now()) - undoRow.at <= optionUndoMs ? undoRow : null
+    if (shown === null && row === null) return next(e)
+    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
+    const undoButton = row === null ? null : <Button key="undo" label="Undo" hotkey="5" onPress={() => void undo($).then(r => $.ui.toast(r.text)).catch(() => undefined)} />
+
+    if (shown === null && row !== null) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>
+            ↩ {ANSWER_LABEL[row.answer]} · {row.note.line}
+          </Text>
+          <Box>
+            {undoButton}
+            <Button
+              key="close"
+              label="Close"
+              hotkey="0"
+              onPress={() => {
+                undoRow = null
+                $.ui.invalidate('ui.render')
+              }}
+            />
+          </Box>
+        </Box>
+      )
+    }
+    if (shown === null) return next(e)
+    const { note } = shown
+
+    if (shown.kind === 'explained') {
+      return (
+        <Box flexDirection="column">
+          <Text bold>✦ {label(note)}</Text>
+          <Markdown text={note.explanation === '' ? note.line : note.explanation} />
+          <Box>
+            <Button key="chat" label="Chat about it" hotkey="3" onPress={() => void chat($, note).catch(() => undefined)} />
+            <Button key="copy" label="Copy" hotkey="4" onPress={p => void copy($, note, p.surface)} />
+            <Button key="got" label="Got it" hotkey="1" onPress={() => void knew($, note)} />
+            <Button key="dismiss" label="Dismiss" hotkey="0" onPress={() => close($, 'dismissed')} />
+            {undoButton}
+          </Box>
+        </Box>
+      )
+    }
+
+    return (
+      <Box flexDirection="column">
+        <Text>
+          <Text bold>✦ {label(note)}</Text> · {note.line}
+        </Text>
+        {queue.length > 0 ? <Text dimColor>+{queue.length} more note{queue.length > 1 ? 's' : ''} after this one</Text> : null}
+        <Box>
+          <Button
+            key="more"
+            label="Learn more"
+            hotkey="1"
+            onPress={() => void learnMore($, shown).catch(() => undefined)}
+          />
+          <Button key="knew" label="Knew it" hotkey="2" onPress={() => void knew($, note)} />
+          <Button key="chat" label="Chat about it" hotkey="3" onPress={() => void chat($, note).catch(() => undefined)} />
+          <Button key="copy" label="Copy" hotkey="4" onPress={p => void copy($, note, p.surface)} />
+          <Button key="dismiss" label="Dismiss" hotkey="0" onPress={() => close($, 'dismissed')} />
+          {undoButton}
+        </Box>
+      </Box>
+    )
+  })
+
+  on('command.run', { command: 'side-notes' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase().replace(/^#/, '')
+    if (arg === 'on' || arg === 'off') {
+      await $.store.set('off', arg === 'off')
+      return { text: arg === 'off' ? 'Side notes are off.' : 'Side notes are on.' }
+    }
+    if (arg === 'undo') return { text: (await undo($)).text }
+    const everyArg = /^every(?:\s+(\S+))?$/.exec(arg)
+    if (everyArg !== null) {
+      if (everyArg[1] === undefined) return { text: `Checks every ${await checkEvery($)} steps. /side-notes every <${MIN_EVERY}-${MAX_EVERY}> changes it; /side-notes every default goes back to the /config value (${optionEvery}).` }
+      if (everyArg[1] === 'default') {
+        await $.store.delete('every')
+        return { text: `Checks every ${optionEvery} steps (the /config value).` }
+      }
+      const n = clampEvery(everyArg[1])
+      if (n === null) return { text: `Give a whole number from ${MIN_EVERY} to ${MAX_EVERY}, for example /side-notes every 8.` }
+      await $.store.set('every', n)
+      return { text: `Checks every ${n} steps from now on.` }
+    }
+    if (arg === 'log') {
+      const log = (await $.store.get('checkLog')) as Check[] | undefined
+      const rows = (Array.isArray(log) ? log : []).slice(-15).map(c => `${c.at}  step ${c.step}  ${c.outcome}`)
+      const surfaces = (await $.session.surfaces()).join(', ') || 'none'
+      const where = optionTerminal ? 'in the app and the terminal' : 'only in the app'
+      const state = (await isOff($)) ? 'Side notes are off (/side-notes on).' : `Checks run ${where}, every ${await checkEvery($)} steps.`
+      return { text: [`This session draws on: ${surfaces}. ${state}`, ...(rows.length > 0 ? rows : ['No checks yet.'])].join('\n') }
+    }
+    const list = await savedNotes($)
+    // A number: that note, whole, here and in the band with its buttons again.
+    if (/^\d+$/.test(arg)) {
+      const saved = list.find(t => t.n === Number(arg))
+      if (saved === undefined) return { text: `No note #${arg}. /side-notes lists them.` }
+      view = { kind: 'explained', note: saved.note, prompts: 0 }
+      $.ui.invalidate('ui.render')
+      return { text: [`#${saved.n} · ${clockTime(saved.at)} · ${folderName(saved.cwd)} · ${saved.status}`, '', fullText(saved.note), '', 'The note is in the band above the prompt again: Chat about it, Copy, Got it, Dismiss.'].join('\n') }
+    }
+    if (list.length === 0) return { text: 'No side notes yet.' }
+    const cwd = await $.session.cwd()
+    const rows = list
+      .slice(-15)
+      .reverse()
+      .map(t => `#${t.n} · ${clockTime(t.at)} · ${folderName(t.cwd)}${t.cwd === cwd ? ' (here)' : ''} · ${t.status} · ${label(t.note)}: ${t.note.line}`)
+    return { text: ['Last side notes, newest first. /side-notes <number> opens one again.', '', ...rows].join('\n') }
+  })
+}
