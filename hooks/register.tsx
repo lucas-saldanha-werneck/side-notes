@@ -41,14 +41,13 @@ type View = { kind: 'offer' | 'explained'; note: Note; prompts: number }
 // The last answer given to a note in a folder, kept in $.store so a reload or
 // a clear does not lose it. `isSent`: what the answer sent into the main
 // session (a chat, or the explanation on the phone) cannot be taken back.
-type AnswerKind = 'knew' | 'dismissed' | 'more' | 'chat' | 'off'
+type AnswerKind = 'knew' | 'dismissed' | 'more' | 'chat'
 type LastAnswer = {
   at: number
   note: Note
   answer: AnswerKind
   prevStatus: NoteStatus
   isKnownAdded: boolean
-  wasOff: boolean
   isSent: boolean
 }
 type Check = { at: string; session: string; step: number; outcome: string }
@@ -93,7 +92,7 @@ let optionUndoMs = DEFAULT_UNDO_MINUTES * 60_000
 // or the end of the undo window.
 let undoRow: LastAnswer | null = null
 
-const CODES = { '1': 'more', '2': 'knew', '3': 'off' } as const
+const CODES = { '1': 'more', '2': 'knew', '3': 'dismissed' } as const
 type Answer = (typeof CODES)[keyof typeof CODES]
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
@@ -306,14 +305,22 @@ const check = async ($: EngineInterface, step: number): Promise<void> => {
   }
 }
 
+// The two lines Claude shows on the phone, with the rule to translate every
+// label into the person's language (only ✦, the numbers and the note stay).
+const phoneLines = (note: Note): string =>
+  [
+    `"✦ ${label(note)} · ${note.line}"`,
+    '"_1 learn more · 2 knew it · 3 dismiss_"',
+    `Translate every label in these two lines into the language the person writes in: "${label(note)}", "learn more", "knew it" and "dismiss" (in Portuguese, for example: "${note.kind === 'check' ? 'Vale conferir' : 'Nota'}", "saber mais", "já sabia", "dispensar"). Keep the ✦, the numbers 1, 2, 3 and the note text as they are; the note is already in their language.`,
+  ].join('\n')
+
 const phoneContext = (note: Note, isInTurn = false): string =>
   [
     'A side check (the side-notes plugin) found one thing the person may have missed. They read this chat on a phone (Remote Control), where the note above the prompt does not show, so you are the only way it reaches them.',
     isInTurn
-      ? 'Finish the step you are on and go on with the task. When you write your reply to the person at the end of this turn, start it with these two lines, each on its own, written in the language the person writes in (keep the numbers):'
-      : 'Start your reply with these two lines, each on its own, written in the language the person writes in (keep the numbers), then answer their message as usual:',
-    `"✦ ${label(note)} · ${note.line}"`,
-    '"_1 learn more · 2 knew it · 3 turn off_"',
+      ? 'Finish the step you are on and go on with the task. When you write your reply to the person at the end of this turn, start it with the two lines below, each on its own:'
+      : 'Start your reply with the two lines below, each on its own, then answer their message as usual:',
+    phoneLines(note),
     'Do not explain the note unless they ask for it.',
   ].join('\n')
 
@@ -322,7 +329,6 @@ const ANSWER_LABEL: Record<AnswerKind, string> = {
   dismissed: 'Dismissed',
   more: 'Learn more',
   chat: 'Chat about it',
-  off: 'Turned off',
 }
 
 const undoMinutes = (): number => Math.round(optionUndoMs / 60_000)
@@ -331,7 +337,7 @@ const undoMinutes = (): number => Math.round(optionUndoMs / 60_000)
 // "undo" on the phone) can take it back within the undo window.
 const recordAnswer = async ($: EngineInterface, note: Note, answer: AnswerKind, prev: NoteStatus | null, extra: Partial<LastAnswer> = {}): Promise<void> => {
   if (optionUndoMs <= 0) return
-  const rec: LastAnswer = { at: await $.clock.now(), note, answer, prevStatus: prev ?? 'shown', isKnownAdded: false, wasOff: false, isSent: false, ...extra }
+  const rec: LastAnswer = { at: await $.clock.now(), note, answer, prevStatus: prev ?? 'shown', isKnownAdded: false, isSent: false, ...extra }
   await putFolder<LastAnswer>($, 'lastAnswer', rec)
   undoRow = rec
   $.ui.invalidate('ui.render')
@@ -361,7 +367,6 @@ const undo = async ($: EngineInterface): Promise<UndoResult> => {
   }
   const { note } = rec
   if (rec.answer === 'knew' && rec.isKnownAdded) await forget($, 'knownTopics', note.topic)
-  if (rec.answer === 'off') await $.store.set('off', rec.wasOff)
   let isChatStopped = false
   if (rec.answer === 'chat') {
     if (chatToInject !== null) {
@@ -381,7 +386,6 @@ const undo = async ($: EngineInterface): Promise<UndoResult> => {
   await logCheck($, -1, `undo: ${rec.answer}`).catch(() => undefined)
   const parts = [`Undone: "${ANSWER_LABEL[rec.answer]}" on "${note.line}". The note is back above the prompt.`]
   if (rec.answer === 'knew' && rec.isKnownAdded) parts.push('It is no longer marked as known.')
-  if (rec.answer === 'off') parts.push(rec.wasOff ? 'Side notes stay off.' : 'Side notes are on again.')
   if (rec.answer === 'chat' && rec.isSent) parts.push('The chat message had already been sent to the session, so that part cannot be taken back.')
   if (rec.answer === 'chat' && isChatStopped) parts.push('The chat message had not reached the session yet and will not be sent.')
   if (rec.answer === 'more' && rec.isSent) parts.push('The explanation was already given in the chat, so that part cannot be taken back.')
@@ -390,19 +394,17 @@ const undo = async ($: EngineInterface): Promise<UndoResult> => {
 
 const answerContext = async ($: EngineInterface, note: Note, answer: Answer): Promise<string> => {
   await logCheck($, -1, `phone answer: ${answer}`).catch(() => undefined)
-  const prev = await setStatus($, note, answer === 'knew' ? 'knew' : answer === 'off' ? 'dismissed' : 'chat').catch(() => null)
+  const prev = await setStatus($, note, answer === 'more' ? 'chat' : answer).catch(() => null)
   const lead = `The person's message is a code that answers the side note "${note.line}".`
-  const undoHint = optionUndoMs > 0 ? ` Add that replying "undo" within ${undoMinutes()} minutes takes it back.` : ''
+  const undoHint = optionUndoMs > 0 ? ` Add that replying "undo" within ${undoMinutes()} minutes takes it back, all in their language (keep the word "undo", or use "desfazer" in Portuguese).` : ''
   if (answer === 'knew') {
     const isKnownAdded = await remember($, 'knownTopics', note.topic)
     await recordAnswer($, note, 'knew', prev, { isKnownAdded })
     return `${lead} They knew it already; it will not come back. Say so in one short line, in their language.${undoHint}`
   }
-  if (answer === 'off') {
-    const wasOff = await isOff($)
-    await $.store.set('off', true)
-    await recordAnswer($, note, 'off', prev, { wasOff })
-    return `${lead} They turned side notes off. Say so in one short line, in their language, and that /${$.plugin.name} on turns them back on.${undoHint}`
+  if (answer === 'dismissed') {
+    await recordAnswer($, note, 'dismissed', prev)
+    return `${lead} They dismissed this note; later notes keep coming (/${$.plugin.name} off stops them all). Say so in one short line, in their language.${undoHint}`
   }
   await recordAnswer($, note, 'more', prev, { isSent: true })
   return [`${lead} They want to learn more: explain it in plain words, in their language, then chat about it if they want. The explanation:`, note.explanation === '' ? note.line : note.explanation].join('\n')
@@ -412,7 +414,7 @@ const undoContext = (r: UndoResult): string =>
   [
     `The side-notes plugin read the person's message as taking back their last answer to a side note. Result: ${r.text}`,
     'Say so in one short line, in their language.',
-    r.note === null ? '' : `Then show the note again with these two lines, each on its own, in their language (keep the numbers):\n"✦ ${label(r.note)} · ${r.note.line}"\n"_1 learn more · 2 knew it · 3 turn off_"`,
+    r.note === null ? '' : `Then show the note again with these two lines, each on its own:\n${phoneLines(r.note)}`,
     'If their message clearly meant something else, also answer it as usual.',
   ]
     .filter(s => s !== '')

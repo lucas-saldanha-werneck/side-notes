@@ -713,14 +713,19 @@ test('on the phone, "undo" after 2 takes back Knew it and shows the note again',
   expect(knownPart(forkPrompts.at(-1) ?? '')).not.toContain('unpushed local build')
 })
 
-test('on the phone, undo after 3 turns notes back on; after 1 it says the explanation was given', async ($, on) => {
+test('on the phone, 3 dismisses only this note and undo restores it; after 1 undo says the explanation was given', async ($, on) => {
   const { seen } = await phoneUndoSetup($, on)
   await $.prompt.submit({ text: '3', origin: { kind: 'bridge' } } as never)
-  expect(seen[2]).toContain('turned side notes off')
-  await $.prompt.submit({ text: 'undo', origin: { kind: 'bridge' } } as never)
-  expect(seen[3]).toContain('on again')
+  expect(seen[2]).toContain('dismissed this note')
+  expect(seen[2]).toContain('later notes keep coming')
+  // Notes are not turned off.
   const log = await $.command.run({ command: 'side-notes', args: 'log' } as never)
   expect(log.text).not.toContain('Side notes are off')
+  expect((await $.command.run({ command: 'side-notes', args: '' } as never)).text).toContain('· dismissed ·')
+  await $.prompt.submit({ text: 'undo', origin: { kind: 'bridge' } } as never)
+  expect(seen[3]).toContain('Undone: \\"Dismissed\\"')
+  expect(seen[3]).toContain('3 dismiss')
+  expect((await $.command.run({ command: 'side-notes', args: '' } as never)).text).toContain('· shown ·')
   await $.prompt.submit({ text: '1', origin: { kind: 'bridge' } } as never)
   expect(seen[4]).toContain('learn more')
   await $.prompt.submit({ text: 'undo', origin: { kind: 'bridge' } } as never)
@@ -770,7 +775,10 @@ test('a terminal session driven from the phone gets the note inside the running 
   const r = await $.tool.call({ tool: 'Read', file_path: 'a.md' } as never)
   const ctx = JSON.stringify(r.context ?? [])
   expect(ctx).toContain('only on this Mac')
-  expect(ctx).toContain('1 learn more · 2 knew it · 3 turn off')
+  expect(ctx).toContain('1 learn more · 2 knew it · 3 dismiss')
+  // Labels are translated into the person's language.
+  expect(ctx).toContain('Translate every label')
+  expect(ctx).toContain('saber mais')
   expect(ctx).toContain('end of this turn')
   // Only once.
   const r2 = await $.tool.call({ tool: 'Read', file_path: 'b.md' } as never)
@@ -783,7 +791,12 @@ test('a terminal session driven from the phone gets the note inside the running 
   await phone($, 'undo')
   expect(seen[2]).toContain('Undone')
   await phone($, '3')
-  expect(seen[3]).toContain('turned side notes off')
+  expect(seen[3]).toContain('dismissed this note')
+  // A dismissed note does not stop the next check.
+  await $.turn.start({ turnId: 't2', text: 'more' } as never)
+  await step($, 12)
+  for (let i = 0; i < 40; i++) await settle()
+  expect(forkPrompts.length).toBeGreaterThan(1)
 })
 
 test('phone only: a note found after the last tool call is told with the next phone prompt', async ($, on) => {

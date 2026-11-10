@@ -25,10 +25,12 @@ Remote Control, Claude tells you the note itself, at the top of its reply:
 
 ```
 ✦ Worth checking · The new build is only on this Mac, so a teammate will not see it yet
-1 learn more · 2 knew it · 3 turn off
+1 learn more · 2 knew it · 3 dismiss
 ```
 
-Reply with just the number. Reply `undo` (or `desfazer`) to take the answer back.
+Reply with just the number. Reply `undo` (or `desfazer`) to take the answer back. Claude writes
+these labels in the language you write in, like the note: in Portuguese, for example,
+`✦ Vale conferir · ...` and `1 saber mais · 2 já sabia · 3 dispensar`.
 
 Notes are written in the language you write in.
 
@@ -59,8 +61,7 @@ also loads in the desktop app's local Code sessions.
 - **Undo** (5): an answer can be taken back for 5 minutes. The band shows a small row with an
   Undo button after you answer, until your next prompt. `/side-notes undo` works for the whole
   window, also after a reload or `/clear`. On the phone, reply `undo` (or `desfazer`). Undo puts
-  the note back as it was, removes the topic from the "known" list if Knew it added it, and turns
-  notes back on if 3 turned them off. A chat that already reached the main session, or an
+  the note back as it was, and removes the topic from the "known" list if Knew it added it. A chat that already reached the main session, or an
   explanation Claude already gave on the phone, cannot be taken back: undo says so. A chat still
   waiting for the running task to reach its next step is stopped.
 - A Chat about it pressed while Claude is working enters the running task at its next tool result,
@@ -72,7 +73,8 @@ also loads in the desktop app's local Code sessions.
   working is added to the running turn with its next tool result, so Claude puts it at the top of
   the reply that ends that turn. A note found after the last tool call comes with your next phone
   prompt instead. A reply of only `1`, `2` or `3` answers the note for the next 5 prompts: Claude
-  gets it as an answer to the note, not as a new request. `3` turns notes off. Any other reply lets
+  gets it as an answer to the note, not as a new request. `3` dismisses this note only, like the band's Dismiss: later notes keep coming
+  (`/side-notes off` stops them all). Any other reply lets
   the note go. A terminal session you type into at the keyboard runs no checks, even with a
   phone attached, unless `run_in_terminal` is on.
 - Topics already shown, and topics you said you knew, are remembered and not shown again.
@@ -130,7 +132,7 @@ useful, and asks the side request to never copy secrets or personal data into a 
   `check_every` to check less often.
 - By default it runs only where the session draws on the desktop app and not on a terminal.
 - The phone flow depends on the main agent following the added context. It may phrase the lines
-  its own way, and it kept the labels ("Side note", "learn more") in English in the live test.
+  its own way. In the first live test it kept the labels in English; the context now asks it to translate each label by name, which has not been tried live yet.
 - What Claude Code 2.1.321 sends for a Remote Control prompt, captured live from a terminal
   session with `/rc` and a prompt sent from claude.ai/code: `prompt.submit` with
   `origin: {kind: "bridge"}` (and `session.receive` with the same origin), while
