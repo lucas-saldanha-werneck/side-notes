@@ -75,6 +75,9 @@ let isLastPromptRemote = false
 let remoteNoteToInject: Note | null = null
 // Whether this process has seen one of the person's prompts yet.
 let lastOriginSeen = false
+// Main-agent steps counted across turns: `e.index` starts again at every turn,
+// and a phone question is often a turn of one or two steps.
+let stepCount = 0
 // The chat prompt's own turn: 'submitted' at prompt.submit, 'running' at
 // turn.start; an answered turn.complete clears the pending chat.
 let chatTurn: 'none' | 'submitted' | 'running' = 'none'
@@ -135,6 +138,19 @@ const isRemoteDriven = async ($: EngineInterface): Promise<boolean> => {
   if (lastOriginSeen) return isLastPromptRemote
   const saved = (await byFolder<boolean>($, 'remote').catch(() => ({}) as Record<string, boolean>))[await $.session.cwd()]
   return saved === true
+}
+
+// Debug mode (/side-notes debug on): each prompt, delivery and attach is kept
+// in the store as the engine sent it, to see what a Remote Control prompt
+// looks like on this build. Text is cut to its first 40 characters.
+const DEBUG_KEPT = 40
+const debugLog = async ($: EngineInterface, event: string, e: Record<string, unknown>): Promise<void> => {
+  if ((await $.store.get('debug')) !== true) return
+  const shown: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(e)) shown[k] = typeof v === 'string' ? v.slice(0, 40) : v
+  const entry = { at: new Date().toISOString(), event, surfaces: await $.session.surfaces(), e: shown }
+  const log = (await $.store.get('debugLog')) as unknown[] | undefined
+  await $.store.set('debugLog', [...(Array.isArray(log) ? log : []), entry].slice(-DEBUG_KEPT))
 }
 
 const isOff = async ($: EngineInterface): Promise<boolean> => (await $.store.get('off')) === true
@@ -507,16 +523,31 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId === undefined && e.index > 0 && view === null && !isChecking) {
-      const every = await checkEvery($)
-      // The app, or any session driven from the phone (a terminal with Remote
-      // Control included): the band does not show there, Claude tells the note.
-      if (e.index % every === 0 && ((await shouldRunHere($)) || (await isRemoteDriven($)))) void check($, e.index)
+    if (e.agentId === undefined) {
+      stepCount += 1
+      if (view === null && !isChecking) {
+        const every = await checkEvery($)
+        // The app, or any session driven from the phone (a terminal with Remote
+        // Control included; Remote Control adds no surface): the band does not
+        // show there, Claude tells the note.
+        if (stepCount % every === 0 && ((await shouldRunHere($)) || (await isRemoteDriven($)))) void check($, stepCount)
+      }
     }
     return yield* next(e)
   })
 
+  on('session.receive', async ($, e, next) => {
+    await debugLog($, 'session.receive', e as unknown as Record<string, unknown>).catch(() => undefined)
+    return next(e)
+  })
+
+  on('session.attach', async ($, e, next) => {
+    await debugLog($, 'session.attach', e as unknown as Record<string, unknown>).catch(() => undefined)
+    return next(e)
+  })
+
   on('prompt.submit', async ($, e0, next) => {
+    await debugLog($, 'prompt.submit', e0 as unknown as Record<string, unknown>).catch(() => undefined)
     const origin = e0.origin
     const kind = origin?.kind
     // Our own "Chat about it" prompt: watch its turn.
@@ -558,7 +589,7 @@ export const register: Register = (on, options) => {
       toldPrompts += 1
       if (code !== undefined || toldPrompts >= PHONE_ANSWER_PROMPTS) toldNote = null
       if (code !== undefined) {
-        if (view?.note === note) close($)
+        if (view?.note.line === note.line) close($)
         return next({ ...e, context: [...(e.context ?? []), await answerContext($, note, CODES[code])] })
       }
     }
@@ -720,6 +751,14 @@ export const register: Register = (on, options) => {
       await $.store.set('off', arg === 'off')
       return { text: arg === 'off' ? 'Side notes are off.' : 'Side notes are on.' }
     }
+    if (arg === 'debug on' || arg === 'debug off') {
+      await $.store.set('debug', arg === 'debug on')
+      return { text: `Debug log ${arg === 'debug on' ? 'on' : 'off'}.` }
+    }
+    if (arg === 'debug') {
+      const log = (await $.store.get('debugLog')) as unknown[] | undefined
+      return { text: (Array.isArray(log) ? log : []).slice(-20).map(x => JSON.stringify(x)).join('\n') || 'Debug log empty (/side-notes debug on).' }
+    }
     if (arg === 'undo') return { text: (await undo($)).text }
     const everyArg = /^every(?:\s+(\S+))?$/.exec(arg)
     if (everyArg !== null) {
@@ -739,7 +778,8 @@ export const register: Register = (on, options) => {
       const surfaces = (await $.session.surfaces()).join(', ') || 'none'
       const where = optionTerminal ? 'in the app and the terminal' : 'only in the app'
       const state = (await isOff($)) ? 'Side notes are off (/side-notes on).' : `Checks run ${where}, every ${await checkEvery($)} steps.`
-      return { text: [`This session draws on: ${surfaces}. ${state}`, ...(rows.length > 0 ? rows : ['No checks yet.'])].join('\n') }
+      const remote = (await isRemoteDriven($)) ? 'Last prompt came through Remote Control (phone or web): notes are told by Claude.' : 'Last prompt was typed here.'
+      return { text: [`This session draws on: ${surfaces}. ${remote} ${state} Steps so far: ${stepCount}.`, ...(rows.length > 0 ? rows : ['No checks yet.'])].join('\n') }
     }
     const list = await savedNotes($)
     // A number: that note, whole, here and in the band with its buttons again.

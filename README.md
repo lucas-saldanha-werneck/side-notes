@@ -48,8 +48,9 @@ also loads in the desktop app's local Code sessions.
 
 ## Use
 
-- Every 6 steps of the main agent (one step is one model request), a side request is sent with
-  the conversation so far and no tools. It answers either "nothing" or one note.
+- Every 6 steps of the main agent (one step is one model request), counted across turns, a side
+  request is sent with the conversation so far and no tools. A phone question is often a turn of
+  one or two steps, so the count goes on from one turn to the next. It answers either "nothing" or one note.
 - No new check runs while a note is on screen.
 - The band buttons: **Learn more** (1) shows the explanation, **Knew it** (2) marks the topic as
   known, **Chat about it** (3) sends the note into the main session so you can talk about it,
@@ -81,7 +82,9 @@ also loads in the desktop app's local Code sessions.
   the band of the session that follows a `/clear` (for 1 hour).
 - `/side-notes` lists the last notes. `/side-notes <number>` opens one again in the band.
   `/side-notes log` shows the last checks and their outcome. `/side-notes off` and `on` stop and
-  start the checks. `/side-notes every <n>` sets how often it checks.
+  start the checks. `/side-notes every <n>` sets how often it checks. `/side-notes debug on` keeps
+  each prompt and delivery event (origin, first 40 characters) in the store, and `/side-notes debug`
+  shows them. Turn it off with `/side-notes debug off`.
 
 ## Settings
 
@@ -127,11 +130,15 @@ useful, and asks the side request to never copy secrets or personal data into a 
   `check_every` to check less often.
 - By default it runs only where the session draws on the desktop app and not on a terminal.
 - The phone flow depends on the main agent following the added context. It may phrase the lines
-  its own way. The phone flow is tested end to end only in the test kit, with Remote Control
-  prompts simulated (origin `bridge`, surfaces `terminal` + `mobile`, `mobile`, `desktop` +
-  `mobile`). Nobody has tried it on a real phone yet.
-- Which surfaces the desktop app reports while you drive it from the phone has not been checked
-  by hand. The mod does not depend on it: a Remote Control prompt is enough.
+  its own way, and it kept the labels ("Side note", "learn more") in English in the live test.
+- What Claude Code 2.1.321 sends for a Remote Control prompt, captured live from a terminal
+  session with `/rc` and a prompt sent from claude.ai/code: `prompt.submit` with
+  `origin: {kind: "bridge"}` (and `session.receive` with the same origin), while
+  `$.session.surfaces()` stays `["terminal"]`. A phone or web client adds no surface, so the mod
+  goes by the prompt's origin only.
+- Tried live from claude.ai/code in a browser (the same Remote Control path the phone app uses):
+  a note told at the top of the reply, both when it waited for the next prompt and when it joined
+  the running turn; `2` and `desfazer` handled. Not tried from the phone app itself.
 - The phone's `undo` is read as undo only when an answer is waiting to be undone. Otherwise it
   goes to Claude as a normal message.
 - The tests use the test kit's stand-ins for the engine. It has not been tried by hand yet in the

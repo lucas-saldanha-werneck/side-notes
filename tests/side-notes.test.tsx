@@ -22,9 +22,16 @@ const settle = async () => {
   for (let i = 0; i < 50; i++) await Promise.resolve()
 }
 
-const step = async ($: any, index: number) => {
-  const s = $.turn.step({ turnId: 't1', index, model: 'm', messageCount: 3 })
-  for await (const _ of s) void _
+// Steps are counted across turns: step($, n) runs main-agent steps until this
+// test has run n of them in all.
+const counts = new WeakMap<object, number>()
+const step = async ($: any, upTo: number) => {
+  for (let n = counts.get($) ?? 0; n < upTo; n++) {
+    const s = $.turn.step({ turnId: 't1', index: n % 3, model: 'm', messageCount: 3 })
+    for await (const _ of s) void _
+    counts.set($, n + 1)
+    await settle()
+  }
   await settle()
 }
 
@@ -474,9 +481,9 @@ const forkSetup = (on: any, surfaces: string[], answers: string[] = []) => {
 
 test('check_every from /config sets how often it checks', { options: { check_every: 4 } }, async ($, on) => {
   const prompts = forkSetup(on, ['desktop'])
-  await step($, 6)
+  await step($, 3)
   expect(prompts.length).toBe(0)
-  await step($, 8)
+  await step($, 4)
   for (let i = 0; i < 40; i++) await settle()
   expect(prompts.length).toBe(1)
 })
@@ -485,19 +492,19 @@ test('/side-notes every <n> wins over /config and default goes back', async ($, 
   const prompts = forkSetup(on, ['desktop'])
   const set = await $.command.run({ command: 'side-notes', args: 'every 3' } as never)
   expect(set.text).toContain('every 3 steps')
-  await step($, 6)
+  await step($, 3)
   for (let i = 0; i < 40; i++) await settle()
   expect(prompts.length).toBe(1)
-  await step($, 9)
+  await step($, 6)
   for (let i = 0; i < 40; i++) await settle()
   expect(prompts.length).toBe(2)
   const bad = await $.command.run({ command: 'side-notes', args: 'every 1' } as never)
   expect(bad.text).toContain('whole number')
   await $.command.run({ command: 'side-notes', args: 'every default' } as never)
-  await step($, 15)
+  await step($, 11)
   for (let i = 0; i < 40; i++) await settle()
   expect(prompts.length).toBe(2)
-  await step($, 18)
+  await step($, 12)
   for (let i = 0; i < 40; i++) await settle()
   expect(prompts.length).toBe(3)
 })
@@ -753,7 +760,7 @@ const remoteSetup = (on: any, surfaces: string[]) => {
 const phone = async ($: any, text: string) => $.prompt.submit({ text, origin: { kind: 'bridge' } } as never)
 
 test('a terminal session driven from the phone gets the note inside the running turn, then 2 and undo answer it', async ($, on) => {
-  const { seen, forkPrompts } = remoteSetup(on, ['terminal', 'mobile'])
+  const { seen, forkPrompts } = remoteSetup(on, ['terminal'])
   await phone($, 'fix the build')
   await $.turn.start({ turnId: 't1', text: 'fix the build' } as never)
   await step($, 6)
@@ -795,7 +802,7 @@ test('phone only: a note found after the last tool call is told with the next ph
 })
 
 test('a terminal session typed at the keyboard, with a phone attached, runs no check', async ($, on) => {
-  const { forkPrompts } = remoteSetup(on, ['terminal', 'mobile'])
+  const { forkPrompts } = remoteSetup(on, ['terminal'])
   await $.prompt.submit({ text: 'typed', origin: { kind: 'composer' } } as never)
   await step($, 6)
   for (let i = 0; i < 40; i++) await settle()
@@ -810,4 +817,31 @@ test('the desktop app driven from the phone also tells the note in the running t
   for (let i = 0; i < 40; i++) await settle()
   const r = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
   expect(JSON.stringify(r.context ?? [])).toContain('only on this Mac')
+})
+
+test('steps add up across short turns: a phone question of one step still gets checked', async ($, on) => {
+  const { forkPrompts } = remoteSetup(on, ['terminal'])
+  for (let t = 0; t < 6; t++) {
+    await phone($, `question ${t}`)
+    // One step per turn, index 0 every time.
+    const s = $.turn.step({ turnId: `t${t}`, index: 0, model: 'm', messageCount: 3 } as never)
+    for await (const _ of s) void _
+    for (let i = 0; i < 40; i++) await settle()
+  }
+  expect(forkPrompts.length).toBe(1)
+})
+
+test('a phone answer also clears the note from the band (the store copy is another object)', async ($, on) => {
+  const { seen } = remoteSetup(on, ['terminal'])
+  await phone($, 'hi')
+  await step($, 6)
+  for (let i = 0; i < 40; i++) await settle()
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' } as never)
+  expect(await ui.find(NOTE_ROW)).toBeDefined()
+  await phone($, 'next')
+  expect(seen[1]).toContain('only on this Mac')
+  await phone($, '2')
+  await settle()
+  expect(await ui.find(NOTE_ROW)).toBeUndefined()
+  await ui.unmount()
 })
