@@ -858,3 +858,46 @@ test('a phone answer also clears the note from the band (the store copy is anoth
   expect(await ui.find(NOTE_ROW)).toBeUndefined()
   await ui.unmount()
 })
+
+test('a fresh phone session in a folder with a restored note: the note is told, and checks still run', async ($, on) => {
+  const s = { id: 'old', startedAt: 1_000, now: 10_000 }
+  const sent: string[] = []
+  const forkPrompts: string[] = []
+  const second = JSON.stringify({ topic: 'folder open to all', note: 'The folder is writable by everyone.', kind: 'check', detail: 'x' })
+  lostChatSetup(on, s, sent, [ANSWER, second], forkPrompts)
+  on('command.register', async () => ({ value: undefined }) as never)
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }) as never)
+  on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }) as never)
+  on('tool.call', async () => ({ result: 'ok', text: 'ok' }) as never)
+  // An earlier session shows a note nobody answers.
+  await step($, 6)
+  for (let i = 0; i < 40; i++) await settle()
+  expect(forkPrompts.length).toBe(1)
+  // A new session in the same folder: the note comes back in the band.
+  s.id = 'new'
+  s.now = 20_000
+  await $.session.start({ cwd: '/jbei', surface: 'terminal', isInteractive: true } as never)
+  for (let i = 0; i < 10; i++) await settle()
+  // The first phone prompt tells the restored note.
+  await phone($, 'make 3 files and chmod the folder')
+  expect(sent[0]).toContain('only on this Mac')
+  expect(sent[0]).toContain('3 dismiss')
+  // Its turn has tool steps: the restored note does not hold back the check.
+  await $.turn.start({ turnId: 't2', text: 'x' } as never)
+  await step($, 12)
+  for (let i = 0; i < 40; i++) await settle()
+  expect(forkPrompts.length).toBe(2)
+  // The new note joins the running turn; the restored one waits behind it.
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(JSON.stringify(r.context ?? [])).toContain('writable by everyone')
+  await $.turn.complete({ turnId: 't2', reason: 'answer', answer: 'done', durationMs: 5, isAborted: false } as never)
+  // 3 answers the newest note told; the restored one is not told twice.
+  await phone($, '3')
+  expect(sent[1]).toContain('writable by everyone')
+  expect(sent[1]).toContain('dismissed this note')
+  await phone($, 'thanks')
+  expect(sent[2]).not.toContain('only on this Mac')
+  const log = await $.command.run({ command: 'side-notes', args: 'log' } as never)
+  expect(log.text).toContain('told on the phone: the note in the band')
+})

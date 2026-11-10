@@ -37,7 +37,9 @@ const RESTORE_MAX_AGE_MS = 60 * 60_000
 const DEFAULT_UNDO_MINUTES = 5
 const MAX_UNDO_MINUTES = 120
 
-type View = { kind: 'offer' | 'explained'; note: Note; prompts: number }
+// `isRestored`: the note came back from an earlier session or from the queue;
+// it does not hold back new checks, a note found in this session does.
+type View = { kind: 'offer' | 'explained'; note: Note; prompts: number; isRestored?: true }
 // The last answer given to a note in a folder, kept in $.store so a reload or
 // a clear does not lose it. `isSent`: what the answer sent into the main
 // session (a chat, or the explanation on the phone) cannot be taken back.
@@ -84,6 +86,9 @@ let chatTurn: 'none' | 'submitted' | 'running' = 'none'
 // only 1, 2 or 3 answers it; any other reply lets it go, as the band does.
 let toldNote: Note | null = null
 let toldPrompts = 0
+// Notes Claude was already asked to tell on the phone, by their text: a note
+// in the band that is not here yet goes with the next phone prompt.
+const toldLines = new Set<string>()
 // Options from /config, read at register.
 let optionEvery = DEFAULT_EVERY
 let optionTerminal = false
@@ -286,6 +291,8 @@ const check = async ($: EngineInterface, step: number): Promise<void> => {
     }
     await remember($, 'shownTopics', note.topic)
     await saveNote($, note)
+    // A restored note still in the band waits behind the new one.
+    if (view !== null) queue.unshift(view.note)
     view = { kind: 'offer', note, prompts: 0 }
     $.ui.invalidate('ui.render')
     outcome = 'shown'
@@ -425,7 +432,7 @@ const undoContext = (r: UndoResult): string =>
 const close = ($: EngineInterface, answer?: AnswerKind | 'expired'): void => {
   const note = view?.note
   const next = queue.shift()
-  view = next === undefined ? null : { kind: 'offer', note: next, prompts: 0 }
+  view = next === undefined ? null : { kind: 'offer', note: next, prompts: 0, isRestored: true }
   $.ui.invalidate('ui.render')
   if (note === undefined || answer === undefined) return
   if (answer === 'expired') {
@@ -516,7 +523,7 @@ export const register: Register = (on, options) => {
     const open = await openNotes($).catch(() => [] as Saved[])
     const [first, ...rest] = open
     if (first !== undefined) {
-      view = { kind: 'offer', note: first.note, prompts: 0 }
+      view = { kind: 'offer', note: first.note, prompts: 0, isRestored: true }
       queue = rest.map(t => t.note)
       $.ui.invalidate('ui.render')
       await logCheck($, -1, `shown again after a clear: ${open.map(t => `#${t.n}`).join(', ')}`).catch(() => undefined)
@@ -527,7 +534,7 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     if (e.agentId === undefined) {
       stepCount += 1
-      if (view === null && !isChecking) {
+      if ((view === null || view.isRestored === true) && !isChecking) {
         const every = await checkEvery($)
         // The app, or any session driven from the phone (a terminal with Remote
         // Control included; Remote Control adds no surface): the band does not
@@ -582,6 +589,7 @@ export const register: Register = (on, options) => {
       if (r.note !== null) {
         toldNote = r.note
         toldPrompts = 0
+        toldLines.add(r.note.line)
       }
       return next({ ...e, context: [...(e.context ?? []), undoContext(r)] })
     }
@@ -595,13 +603,18 @@ export const register: Register = (on, options) => {
         return next({ ...e, context: [...(e.context ?? []), await answerContext($, note, CODES[code])] })
       }
     }
-    const phoneNote = kind === 'bridge' ? await takePhoneNote($).catch(() => null) : null
+    // A note waiting for the phone, or any note in the band that Claude has not
+    // told yet (one restored after a clear, or found while typing at the desk).
+    const waiting = kind === 'bridge' ? await takePhoneNote($).catch(() => null) : null
+    const inBand = kind === 'bridge' && view !== null && !toldLines.has(view.note.line) ? view.note : null
+    const phoneNote = waiting !== null && !toldLines.has(waiting.line) ? waiting : inBand
     if (phoneNote !== null) {
       const note = phoneNote
       remoteNoteToInject = null
       toldNote = note
       toldPrompts = 0
-      await logCheck($, -1, 'told on the phone').catch(() => undefined)
+      toldLines.add(note.line)
+      await logCheck($, -1, waiting === note ? 'told on the phone' : 'told on the phone: the note in the band').catch(() => undefined)
       return next({ ...e, context: [...(e.context ?? []), phoneContext(note)] })
     }
     // Only the person's own prompts count, not a prompt from another plugin.
@@ -638,6 +651,7 @@ export const register: Register = (on, options) => {
       remoteNoteToInject = null
       toldNote = note
       toldPrompts = 0
+      toldLines.add(note.line)
       await putFolder<PhoneWait>($, 'phoneWait', null).catch(() => undefined)
       await logCheck($, -1, 'told on the phone, in the running turn').catch(() => undefined)
       added.push(phoneContext(note, true))

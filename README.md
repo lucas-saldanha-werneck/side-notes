@@ -53,7 +53,11 @@ also loads in the desktop app's local Code sessions.
 - Every 6 steps of the main agent (one step is one model request), counted across turns, a side
   request is sent with the conversation so far and no tools. A phone question is often a turn of
   one or two steps, so the count goes on from one turn to the next. It answers either "nothing" or one note.
-- No new check runs while a note is on screen.
+- No new check runs while a note found in this session is on screen. A note that came back from
+  an earlier session does not hold back new checks: a new note takes its place and the older one
+  waits behind it.
+- On the phone, any note in the band that Claude has not told yet (one that came back after a
+  `/clear`, or one found while you typed at the desk) goes with your next phone prompt.
 - The band buttons: **Learn more** (1) shows the explanation, **Knew it** (2) marks the topic as
   known, **Chat about it** (3) sends the note into the main session so you can talk about it,
   **Copy** (4) copies the note, **Dismiss** (0) closes it. After Learn more, **Got it** (1) marks
