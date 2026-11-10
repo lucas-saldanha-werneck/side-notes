@@ -23,10 +23,10 @@ Learn more opens a short explanation in plain words.
 The band does not show on the phone. When you drive the session from the Claude app through
 Remote Control, Claude tells you the note itself, at the top of its reply:
 
-```
-✦ Worth checking · The new build is only on this Mac, so a teammate will not see it yet
-1 learn more · 2 knew it · 3 dismiss
-```
+> ✦ Worth checking · The new build is only on this Mac, so a teammate will not see it yet
+> _1 learn more · 2 knew it · 3 dismiss_
+
+The note is a block quote, so it stands apart from the rest of the reply.
 
 Reply with just the number. Reply `undo` (or `desfazer`) to take the answer back. Claude writes
 these labels in the language you write in, like the note: in Portuguese, for example,
@@ -34,9 +34,7 @@ these labels in the language you write in, like the note: in Portuguese, for exa
 
 After `1`, the explanation ends with the same four choices the band shows under an explanation:
 
-```
-1 chat about it · 2 copy · 3 got it · 4 dismiss
-```
+> _1 chat about it · 2 copy · 3 got it · 4 dismiss_
 
 Reply with just the number again. On the phone, Copy makes Claude send the note in a code block,
 because the mod cannot reach the phone's clipboard.

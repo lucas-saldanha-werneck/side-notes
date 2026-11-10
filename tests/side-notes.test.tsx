@@ -971,3 +971,11 @@ test('on the phone, /side-notes <number> ends with the four numbered options and
   expect(seen[2]).toContain('dismissed this note')
   expect(await listNotes($)).toContain('· dismissed ·')
 })
+
+test('on the phone, the note and the choices under an explanation are block quotes', async ($, on) => {
+  const { seen } = await phoneUndoSetup($, on)
+  expect(seen[1]).toContain('> ✦ ')
+  expect(seen[1]).toContain('> _1 learn more · 2 knew it · 3 dismiss_')
+  await phone($, '1')
+  expect(seen[2]).toContain(`> _${AFTER_MORE}_`)
+})

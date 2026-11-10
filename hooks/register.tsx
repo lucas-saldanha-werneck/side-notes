@@ -318,12 +318,17 @@ const check = async ($: EngineInterface, step: number): Promise<void> => {
   }
 }
 
+// On the phone the note sits in the middle of the reply, with no place of its
+// own as in the band: a block quote sets it apart from the rest of the text.
+const QUOTE_RULE = 'Keep the "> " at the start of each of these lines: they form one Markdown block quote, which sets the note apart from the rest of your reply. Leave an empty line before and after the block quote.'
+
 // The two lines Claude shows on the phone, with the rule to translate every
 // label into the person's language (only ✦, the numbers and the note stay).
 const phoneLines = (note: Note): string =>
   [
-    `"✦ ${label(note)} · ${note.line}"`,
-    '"_1 learn more · 2 knew it · 3 dismiss_"',
+    `"> ✦ ${label(note)} · ${note.line}"`,
+    '"> _1 learn more · 2 knew it · 3 dismiss_"',
+    QUOTE_RULE,
     `Translate every label in these two lines into the language the person writes in: "${label(note)}", "learn more", "knew it" and "dismiss" (in Portuguese, for example: "${note.kind === 'check' ? 'Vale conferir' : 'Nota'}", "saber mais", "já sabia", "dispensar"). Keep the ✦, the numbers 1, 2, 3 and the note text as they are; the note is already in their language.`,
   ].join('\n')
 
@@ -331,7 +336,8 @@ const phoneLines = (note: Note): string =>
 const EXPLAINED_LINE = '1 chat about it · 2 copy · 3 got it · 4 dismiss'
 const explainedLines = (): string =>
   [
-    `"_${EXPLAINED_LINE}_"`,
+    `"> _${EXPLAINED_LINE}_"`,
+    QUOTE_RULE,
     'Translate the four labels in this line into the language the person writes in (in Portuguese, for example: "conversar sobre isso", "copiar", "entendi", "dispensar"). Keep the numbers 1, 2, 3, 4.',
   ].join('\n')
 
