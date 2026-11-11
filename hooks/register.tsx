@@ -469,11 +469,14 @@ const explainedContext = async ($: EngineInterface, note: Note, answer: Explaine
   const undoHint = optionUndoMs > 0 ? ` Add that replying "undo" within ${undoMinutes()} minutes takes it back, all in their language (keep the word "undo", or use "desfazer" in Portuguese).` : ''
   if (answer === 'chat') return `${lead} They want to chat about it: ask what they want to know about it, or go deeper where it matters most, in their language.`
   if (answer === 'copy') {
+    // On the phone, Copy also closes the note: it is marked as known and does not come back.
+    const isKnownAdded = await remember($, 'knownTopics', note.topic)
+    await restoreStatus($, note, 'knew').catch(() => undefined)
+    await recordAnswer($, note, 'knew', 'chat', { isKnownAdded })
     return [
-      `${lead} They want to copy the note. The phone cannot reach the clipboard, so reply with only the note in one code block, exactly this text:`,
+      `${lead} They want to copy the note. The phone cannot reach the clipboard, so reply with the note in one code block, exactly this text:`,
       fullText(note),
-      'Then end your reply with the line below, on its own:',
-      explainedLines(),
+      `After the code block, say in one short line, in their language, that the note will not come back.${undoHint}`,
     ].join('\n')
   }
   if (answer === 'knew') {
@@ -681,9 +684,8 @@ export const register: Register = (on, options) => {
       toldPrompts += 1
       if (toldStage === 'explained') {
         const answer = digit === undefined ? undefined : EXPLAINED_CODES[digit as keyof typeof EXPLAINED_CODES]
-        // Copy keeps the options open, as the band does.
-        if (answer === 'copy') toldPrompts = 0
-        else if (answer !== undefined || toldPrompts >= PHONE_ANSWER_PROMPTS) toldNote = null
+        // Every answer closes the note on the phone; Copy also marks it as known.
+        if (answer !== undefined || toldPrompts >= PHONE_ANSWER_PROMPTS) toldNote = null
         if (answer !== undefined) return next({ ...e, context: [...(e.context ?? []), await explainedContext($, note, answer)] })
       } else {
         const answer = digit === undefined || digit === '4' ? undefined : CODES[digit as keyof typeof CODES]

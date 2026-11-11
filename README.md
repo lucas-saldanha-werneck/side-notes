@@ -46,7 +46,8 @@ After `1`, the explanation ends with the same four choices the band shows under 
 
 Reply with just the number again. The count starts again at 5 here, and the short line becomes
 `✦ 1 · 2 · 3 · 4  ●●●●○`. On the phone, Copy makes Claude send the note in a code block,
-because the mod cannot reach the phone's clipboard.
+because the mod cannot reach the phone's clipboard, and closes the note: like Got it, it does not
+come back.
 `/side-notes <number>` sent from the phone ends with the same line, and a reply of just the number
 answers that note.
 

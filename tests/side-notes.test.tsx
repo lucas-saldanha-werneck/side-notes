@@ -916,28 +916,36 @@ test('a fresh phone session in a folder with a restored note: the note is told, 
 const AFTER_MORE = '1 chat about it · 2 copy · 3 got it · 4 dismiss'
 const listNotes = async ($: any): Promise<string> => (await $.command.run({ command: 'side-notes', args: '' } as never)).text
 
-test('on the phone, the explanation ends with four numbered options; 2 copies, 3 marks it as known, undo takes it back', async ($, on) => {
+test('on the phone, the explanation ends with four numbered options; 3 marks it as known, undo takes it back', async ($, on) => {
   const { seen, forkPrompts } = await phoneUndoSetup($, on)
   await phone($, '1')
   expect(seen[2]).toContain('learn more')
   expect(seen[2]).toContain(AFTER_MORE)
-  // Copy: the note in a code block, and the options stay open.
-  await phone($, '2')
-  expect(seen[3]).toContain('code block')
-  expect(seen[3]).toContain('only on this Mac')
-  expect(seen[3]).toContain(AFTER_MORE)
   await phone($, '3')
-  expect(seen[4]).toContain('will not come back')
+  expect(seen[3]).toContain('will not come back')
   expect(await listNotes($)).toContain('· knew ·')
   // The note is answered: a later number is a plain message.
   await phone($, '4')
-  expect(seen[5]).toBe('[]')
+  expect(seen[4]).toBe('[]')
   await phone($, 'undo')
-  expect(seen[6]).toContain('Undone: \\"Knew it\\"')
-  expect(seen[6]).toContain('1 learn more')
+  expect(seen[5]).toContain('Undone: \\"Knew it\\"')
+  expect(seen[5]).toContain('1 learn more')
   await step($, 12)
   for (let i = 0; i < 40; i++) await settle()
   expect(knownPart(forkPrompts.at(-1) ?? '')).not.toContain('unpushed local build')
+})
+
+test('on the phone, after the explanation 2 sends the note in a code block and closes it for good', async ($, on) => {
+  const { seen } = await phoneUndoSetup($, on)
+  await phone($, '1')
+  await phone($, '2')
+  expect(seen[3]).toContain('code block')
+  expect(seen[3]).toContain('will not come back')
+  expect(seen[3]).not.toContain(AFTER_MORE)
+  expect(await listNotes($)).toContain('· knew ·')
+  // Closed: a later number is a plain message.
+  await phone($, '3')
+  expect(seen[4]).toBe('[]')
 })
 
 test('on the phone, after the explanation 4 dismisses the note', async ($, on) => {
@@ -992,7 +1000,7 @@ test('on the phone, the note starts with five dots and each other reply shows on
   expect(seen[7]).toBe('[]')
 })
 
-test('on the phone, after the explanation the dots count the four options; Copy fills them again; an answer ends them', async ($, on) => {
+test('on the phone, after the explanation the dots count the four options; an answer ends them', async ($, on) => {
   const { seen } = await phoneUndoSetup($, on)
   await phone($, 'a')
   expect(seen[2]).toContain('●●●●○')
@@ -1000,15 +1008,13 @@ test('on the phone, after the explanation the dots count the four options; Copy 
   expect(seen[3]).toContain(`> _${AFTER_MORE}_ ●●●●●`)
   await phone($, 'hm')
   expect(seen[4]).toContain('> ✦ 1 · 2 · 3 · 4  ●●●●○')
-  await phone($, '2')
-  expect(seen[5]).toContain(`> _${AFTER_MORE}_ ●●●●●`)
   await phone($, 'ok')
-  expect(seen[6]).toContain('> ✦ 1 · 2 · 3 · 4  ●●●●○')
+  expect(seen[5]).toContain('> ✦ 1 · 2 · 3 · 4  ●●●○○')
   await phone($, '3')
-  expect(seen[7]).toContain('will not come back')
-  expect(seen[7]).not.toContain('●')
+  expect(seen[6]).toContain('will not come back')
+  expect(seen[6]).not.toContain('●')
   await phone($, 'thanks')
-  expect(seen[8]).toBe('[]')
+  expect(seen[7]).toBe('[]')
 })
 
 test('on the phone, /side-notes <number> ends with the four numbered options and a number answers it right away', async ($, on) => {
