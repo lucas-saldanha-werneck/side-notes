@@ -546,6 +546,13 @@ test('the prompt asks for the person\'s language, guards secrets and lists known
   expect(p.split(/\s+/).length).toBeLessThan(1500)
 })
 
+test('the prompt keeps stale state and unexplained timeouts out of notes', () => {
+  const p = checkPrompt([], [])
+  expect(p).toContain('State that may already have changed')
+  expect(p).toContain('say when it was seen')
+  expect(p).toContain('A request can be dropped on purpose')
+})
+
 // --- Undo ---------------------------------------------------------------
 
 const NOTE_ROW = { type: 'Text', text: /^✦.*only on this Mac/ } as never
