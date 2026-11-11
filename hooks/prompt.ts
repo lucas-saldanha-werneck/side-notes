@@ -28,6 +28,8 @@ Not worth a note:
 - Style, wording, or small improvements.
 - Generic advice that would fit any project ("add tests", "back up your data").
 - Guesses with no evidence in the conversation.
+- State that may already have changed: a status, a queue, a running service or a pending request read in an earlier step and not checked since. If later steps show it again, use the latest one. If the note still matters, say when it was seen ("at the save, the relay was not listening").
+- A missing confirmation, a timeout or an item in a "failed" list reported as a failed delivery, unless the conversation shows why it failed. A request can be dropped on purpose.
 - Praise, summaries, or restating the plan.
 - Anything listed below as already shown or already known, or the same idea in other words.
 
