@@ -24,9 +24,17 @@ The band does not show on the phone. When you drive the session from the Claude 
 Remote Control, Claude tells you the note itself, at the top of its reply:
 
 > ✦ Worth checking · The new build is only on this Mac, so a teammate will not see it yet
-> _1 learn more · 2 knew it · 3 dismiss_
+> _1 learn more · 2 knew it · 3 dismiss_ ●●●●●
 
 The note is a block quote, so it stands apart from the rest of the reply.
+
+The dots show how long the numbers still work: a number answers the note for your next 5
+messages. While the note is open, each reply to another message starts with a short line, with
+one dot fewer per message:
+
+> ✦ 1 · 2 · 3  ●●●●○
+
+After your fifth message the line is gone, and a number is a plain message again.
 
 Reply with just the number. Reply `undo` (or `desfazer`) to take the answer back. Claude writes
 these labels in the language you write in, like the note: in Portuguese, for example,
@@ -34,9 +42,10 @@ these labels in the language you write in, like the note: in Portuguese, for exa
 
 After `1`, the explanation ends with the same four choices the band shows under an explanation:
 
-> _1 chat about it · 2 copy · 3 got it · 4 dismiss_
+> _1 chat about it · 2 copy · 3 got it · 4 dismiss_ ●●●●●
 
-Reply with just the number again. On the phone, Copy makes Claude send the note in a code block,
+Reply with just the number again. The count starts again at 5 here, and the short line becomes
+`✦ 1 · 2 · 3 · 4  ●●●●○`. On the phone, Copy makes Claude send the note in a code block,
 because the mod cannot reach the phone's clipboard.
 `/side-notes <number>` sent from the phone ends with the same line, and a reply of just the number
 answers that note.
@@ -87,8 +96,8 @@ also loads in the desktop app's local Code sessions.
   the reply that ends that turn. A note found after the last tool call comes with your next phone
   prompt instead. A reply of only `1`, `2` or `3` answers the note for the next 5 prompts: Claude
   gets it as an answer to the note, not as a new request. `3` dismisses this note only, like the band's Dismiss: later notes keep coming
-  (`/side-notes off` stops them all). Any other reply lets
-  the note go. A terminal session you type into at the keyboard runs no checks, even with a
+  (`/side-notes off` stops them all). Any other reply keeps the note open and uses one of the
+  5 dots; the fifth one lets the note go. A terminal session you type into at the keyboard runs no checks, even with a
   phone attached, unless `run_in_terminal` is on.
 - Topics already shown, and topics you said you knew, are remembered and not shown again.
 - Everything is saved in the plugin store: the list of notes, the remembered topics, a "Chat

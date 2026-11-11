@@ -83,7 +83,8 @@ let stepCount = 0
 // turn.start; an answered turn.complete clears the pending chat.
 let chatTurn: 'none' | 'submitted' | 'running' = 'none'
 // The note Claude told on the phone. For the next phone prompts, a reply of
-// only 1, 2 or 3 answers it; any other reply lets it go, as the band does.
+// only 1, 2 or 3 answers it; the fifth other reply lets it go, and until then
+// each reply shows the dots that are left.
 // After 1 (learn more) the note is `explained`: the reply then picks one of
 // the four options the band shows under an explanation.
 let toldNote: Note | null = null
@@ -322,13 +323,30 @@ const check = async ($: EngineInterface, step: number): Promise<void> => {
 // own as in the band: a block quote sets it apart from the rest of the text.
 const QUOTE_RULE = 'Keep the "> " at the start of each of these lines: they form one Markdown block quote, which sets the note apart from the rest of your reply. Leave an empty line before and after the block quote.'
 
+// The dots show how many more of the person's messages a number still answers
+// the note: one filled dot per message left, out of PHONE_ANSWER_PROMPTS.
+const dots = (left: number): string => '●'.repeat(left) + '○'.repeat(PHONE_ANSWER_PROMPTS - left)
+const DOTS_RULE = 'Copy the dots (● and ○) as they are, without a word about them: they show how many more of their messages a number still answers the note.'
+
+// The short line that goes on top of each reply while the note is still open
+// and the person's message was not an answer: the numbers and the dots left.
+const openNoteContext = (stage: 'offer' | 'explained', left: number): string =>
+  [
+    'A note from the side check (the side-notes plugin) that you already told the person is still open: a reply of only a number still answers it. They read this chat on a phone (Remote Control). Start your reply with the line below, on its own, then answer their message as usual:',
+    `"> ✦ ${stage === 'explained' ? '1 · 2 · 3 · 4' : '1 · 2 · 3'}  ${dots(left)}"`,
+    'Keep the "> " at the start of the line: it is a Markdown block quote, which sets the line apart from the rest of your reply. Leave an empty line after it.',
+    DOTS_RULE,
+    'Do not repeat the note and do not explain this line unless they ask.',
+  ].join('\n')
+
 // The two lines Claude shows on the phone, with the rule to translate every
 // label into the person's language (only ✦, the numbers and the note stay).
 const phoneLines = (note: Note): string =>
   [
     `"> ✦ ${label(note)} · ${note.line}"`,
-    '"> _1 learn more · 2 knew it · 3 dismiss_"',
+    `"> _1 learn more · 2 knew it · 3 dismiss_ ${dots(PHONE_ANSWER_PROMPTS)}"`,
     QUOTE_RULE,
+    DOTS_RULE,
     `Translate every label in these two lines into the language the person writes in: "${label(note)}", "learn more", "knew it" and "dismiss" (in Portuguese, for example: "${note.kind === 'check' ? 'Vale conferir' : 'Nota'}", "saber mais", "já sabia", "dispensar"). Keep the ✦, the numbers 1, 2, 3 and the note text as they are; the note is already in their language.`,
   ].join('\n')
 
@@ -336,8 +354,9 @@ const phoneLines = (note: Note): string =>
 const EXPLAINED_LINE = '1 chat about it · 2 copy · 3 got it · 4 dismiss'
 const explainedLines = (): string =>
   [
-    `"> _${EXPLAINED_LINE}_"`,
+    `"> _${EXPLAINED_LINE}_ ${dots(PHONE_ANSWER_PROMPTS)}"`,
     QUOTE_RULE,
+    DOTS_RULE,
     'Translate the four labels in this line into the language the person writes in (in Portuguese, for example: "conversar sobre isso", "copiar", "entendi", "dispensar"). Keep the numbers 1, 2, 3, 4.',
   ].join('\n')
 
@@ -654,6 +673,8 @@ export const register: Register = (on, options) => {
       }
       return next({ ...e, context: [...(e.context ?? []), undoContext(r)] })
     }
+    // Set when the note stays open after a message that did not answer it.
+    let openNote: string | null = null
     if (kind === 'bridge' && toldNote !== null) {
       const note = toldNote
       const digit = /^\s*([1-4])\s*[.!]?\s*$/.exec(e.text ?? '')?.[1]
@@ -675,6 +696,7 @@ export const register: Register = (on, options) => {
           return next({ ...e, context: [...(e.context ?? []), await answerContext($, note, answer)] })
         }
       }
+      if (toldNote !== null) openNote = openNoteContext(toldStage, PHONE_ANSWER_PROMPTS - toldPrompts)
     }
     // A note waiting for the phone, or any note in the band that Claude has not
     // told yet (one restored after a clear, or found while typing at the desk).
@@ -701,6 +723,8 @@ export const register: Register = (on, options) => {
       view = { ...view, prompts: view.prompts + 1 }
       if (view.prompts >= CLEAR_AFTER_PROMPTS) close($, 'expired')
     }
+    // The close above can take the note the phone was told: then no dots.
+    if (openNote !== null && toldNote !== null) return next({ ...e, context: [...(e.context ?? []), openNote] })
     return next(e)
   }).catch(($, e, next) => next(e))
 

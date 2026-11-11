@@ -730,9 +730,11 @@ test('on the phone, 3 dismisses only this note and undo restores it; after 1 und
   expect(seen[4]).toContain('learn more')
   await $.prompt.submit({ text: 'undo', origin: { kind: 'bridge' } } as never)
   expect(seen[5]).toContain('already given')
-  // With nothing left to undo, "undo" is a plain message.
+  // With nothing left to undo, "undo" is a plain message: the note that came
+  // back is still open, so the reply only gets the line with the dots.
   await $.prompt.submit({ text: 'undo', origin: { kind: 'bridge' } } as never)
-  expect(seen[6]).not.toContain('side-notes')
+  expect(seen[6]).not.toContain('ndo')
+  expect(seen[6]).toContain('●●●●○')
 })
 
 // --- Remote Control, end to end -----------------------------------------
@@ -956,9 +958,50 @@ test('on the phone, after the explanation 1 starts a chat about the note', async
 test('on the phone, before the explanation a reply of 4 is a plain message', async ($, on) => {
   const { seen } = await phoneUndoSetup($, on)
   await phone($, '4')
-  expect(seen[2]).toBe('[]')
+  expect(seen[2]).not.toContain('side note')
+  expect(seen[2]).toContain('●●●●○')
   await phone($, '3')
   expect(seen[3]).toContain('dismissed this note')
+})
+
+// --- On the phone, the dots: how many more messages a number still answers ---
+
+test('on the phone, the note starts with five dots and each other reply shows one fewer; after five the line is gone', async ($, on) => {
+  const { seen } = await phoneUndoSetup($, on)
+  expect(seen[1]).toContain('> _1 learn more · 2 knew it · 3 dismiss_ ●●●●●')
+  await phone($, 'a')
+  expect(seen[2]).toContain('> ✦ 1 · 2 · 3  ●●●●○')
+  expect(seen[2]).not.toContain('only on this Mac')
+  await phone($, 'b')
+  expect(seen[3]).toContain('> ✦ 1 · 2 · 3  ●●●○○')
+  await phone($, 'c')
+  expect(seen[4]).toContain('> ✦ 1 · 2 · 3  ●●○○○')
+  await phone($, 'd')
+  expect(seen[5]).toContain('> ✦ 1 · 2 · 3  ●○○○○')
+  // The fifth reply closes the note: no line, and a number is a plain message again.
+  await phone($, 'e')
+  expect(seen[6]).toBe('[]')
+  await phone($, '1')
+  expect(seen[7]).toBe('[]')
+})
+
+test('on the phone, after the explanation the dots count the four options; Copy fills them again; an answer ends them', async ($, on) => {
+  const { seen } = await phoneUndoSetup($, on)
+  await phone($, 'a')
+  expect(seen[2]).toContain('●●●●○')
+  await phone($, '1')
+  expect(seen[3]).toContain(`> _${AFTER_MORE}_ ●●●●●`)
+  await phone($, 'hm')
+  expect(seen[4]).toContain('> ✦ 1 · 2 · 3 · 4  ●●●●○')
+  await phone($, '2')
+  expect(seen[5]).toContain(`> _${AFTER_MORE}_ ●●●●●`)
+  await phone($, 'ok')
+  expect(seen[6]).toContain('> ✦ 1 · 2 · 3 · 4  ●●●●○')
+  await phone($, '3')
+  expect(seen[7]).toContain('will not come back')
+  expect(seen[7]).not.toContain('●')
+  await phone($, 'thanks')
+  expect(seen[8]).toBe('[]')
 })
 
 test('on the phone, /side-notes <number> ends with the four numbered options and a number answers it right away', async ($, on) => {
