@@ -344,6 +344,9 @@ const check = async ($: EngineInterface, step: number): Promise<void> => {
   }
 }
 
+// The phone app draws text written before a tool call as its own bubble, so a
+// line written first would sit apart from the answer. It goes in the final message.
+const FINAL_MESSAGE_RULE = 'If you use tools before answering, write nothing before them: put the line(s) at the start of the final message of the turn, the one after your last tool call, in the same message as your answer, never as a separate message ahead of the tools.'
 // On the phone the note sits in the middle of the reply, with no place of its
 // own as in the band: a block quote sets it apart from the rest of the text.
 const QUOTE_RULE = 'Keep the "> " at the start of each of these lines: they form one Markdown block quote, which sets the note apart from the rest of your reply. Leave an empty line before and after the block quote.'
@@ -358,6 +361,7 @@ const DOTS_RULE = 'Copy the dots (● and ○) as they are, without a word about
 const openNoteContext = (stage: 'offer' | 'explained', left: number): string =>
   [
     'A note from the side check (the side-notes plugin) that you already told the person is still open: a reply of only a number still answers it. They read this chat on a phone (Remote Control). Start your reply with the line below, on its own, then answer their message as usual:',
+    FINAL_MESSAGE_RULE,
     `"> ✦ ${stage === 'explained' ? '1 · 2 · 3 · 4' : '1 · 2 · 3'}  ${dots(left)}"`,
     'Keep the "> " at the start of the line: it is a Markdown block quote, which sets the line apart from the rest of your reply. Leave an empty line after it.',
     DOTS_RULE,
@@ -380,6 +384,7 @@ const EXPLAINED_LINE = '1 chat about it · 2 copy · 3 got it · 4 dismiss'
 const explainedLines = (): string =>
   [
     `"> _${EXPLAINED_LINE}_ ${dots(PHONE_ANSWER_PROMPTS)}"`,
+    FINAL_MESSAGE_RULE,
     QUOTE_RULE,
     DOTS_RULE,
     'Translate the four labels in this line into the language the person writes in (in Portuguese, for example: "conversar sobre isso", "copiar", "entendi", "dispensar"). Keep the numbers 1, 2, 3, 4.',
@@ -389,8 +394,9 @@ const phoneContext = (note: Note, isInTurn = false): string =>
   [
     'A side check (the side-notes plugin) found one thing the person may have missed. They read this chat on a phone (Remote Control), where the note above the prompt does not show, so you are the only way it reaches them.',
     isInTurn
-      ? 'Finish the step you are on and go on with the task. When you write your reply to the person at the end of this turn, start it with the two lines below, each on its own:'
+      ? 'Finish the step you are on and go on with the task. Write nothing about this before your last tool call. In your reply to the person at the end of this turn (the final message, after the tool calls), start it with the two lines below, each on its own:'
       : 'Start your reply with the two lines below, each on its own, then answer their message as usual:',
+    ...(isInTurn ? [] : [FINAL_MESSAGE_RULE]),
     phoneLines(note),
     'Do not explain the note unless they ask for it.',
   ].join('\n')
