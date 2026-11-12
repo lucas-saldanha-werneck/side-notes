@@ -34,7 +34,9 @@ one dot fewer per message:
 
 > ✦ 1 · 2 · 3  ●●●●○
 
-After your fifth message the line is gone, and a number is a plain message again.
+After your fifth message the line is gone, and a number is a plain message again. When
+Claude's own reply offers numbered choices (`1. ...`, `2. ...`), a number you send next answers
+Claude, not the note. After a `/clear`, the numbers no longer answer a note told before it.
 
 Reply with just the number. Reply `undo` (or `desfazer`) to take the answer back. Claude writes
 these labels in the language you write in, like the note: in Portuguese, for example,
@@ -102,9 +104,12 @@ also loads in the desktop app's local Code sessions.
   phone attached, unless `run_in_terminal` is on.
 - Topics already shown, and topics you said you knew, are remembered and not shown again.
 - Everything is saved in the plugin store: the list of notes, the remembered topics, a "Chat
-  about it" that a `/clear` cut off (the next session in the same folder gets it), a note waiting
+  about it" that a `/clear` cut off (the session that `/clear` started gets it; another session
+  open in the same folder does not), a note waiting
   for your next phone prompt, and the last answer for undo. A note nobody answered comes back in
   the band of the session that follows a `/clear` (for 1 hour).
+- The note and its explanation reach Claude marked as text written by the side check, to explain,
+  not instructions to follow, and cut to a fixed length.
 - `/side-notes` lists the last notes. `/side-notes <number>` opens one again in the band.
   `/side-notes log` shows the last checks and their outcome. `/side-notes off` and `on` stop and
   start the checks. `/side-notes every <n>` sets how often it checks. `/side-notes debug on` keeps
