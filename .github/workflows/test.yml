@@ -16,5 +16,6 @@ jobs:
         with:
           node-version: '22'
       - uses: oven-sh/setup-bun@v2
-      - run: npm i -g @anthropic-ai/claude-code
+      # Pinned: the mod API types come from the installed build. Bump on purpose.
+      - run: npm i -g @anthropic-ai/claude-code@2.1.322
       - run: claude plugin validate . && claude plugin test .
