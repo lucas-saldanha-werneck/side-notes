@@ -821,6 +821,7 @@ test('phone only: a note found after the last tool call is told with the next ph
   await phone($, 'next')
   expect(seen[1]).toContain('only on this Mac')
   expect(seen[1]).toContain('Start your reply')
+  expect(seen[1]).toContain('final message of the turn')
   await phone($, '1')
   expect(seen[2]).toContain('Nothing was pushed')
 })
