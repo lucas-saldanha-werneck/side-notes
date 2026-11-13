@@ -1,5 +1,9 @@
 # side-notes
 
+[![CI](https://github.com/lucas-saldanha-werneck/side-notes/actions/workflows/test.yml/badge.svg)](https://github.com/lucas-saldanha-werneck/side-notes/actions/workflows/test.yml)
+[![License](https://img.shields.io/github/license/lucas-saldanha-werneck/side-notes)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.1.7-blue)](CHANGELOG.md)
+
 A Claude Code mod. Every few steps, a side check reads the conversation and looks for one thing
 you probably missed and that matters: a decision Claude made without saying so, a hidden
 tradeoff, a result that may be wrong, or a concept you keep running into. Most of the time it
@@ -197,3 +201,7 @@ The same two commands run in GitHub Actions on Linux, macOS and Windows.
 MIT. See `LICENSE`.
 
 Built with Claude Code
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for what this plugin accesses and how to report a vulnerability.
