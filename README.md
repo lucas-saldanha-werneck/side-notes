@@ -3,6 +3,7 @@
 [![CI](https://github.com/lucas-saldanha-werneck/side-notes/actions/workflows/test.yml/badge.svg)](https://github.com/lucas-saldanha-werneck/side-notes/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/lucas-saldanha-werneck/side-notes)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.1.7-blue)](CHANGELOG.md)
+[![plugin score (proposal)](https://img.shields.io/badge/plugin%20score%20(proposal)-98.0%20A-brightgreen)](https://github.com/NVIDIA/SkillEvaluator/issues/508)
 
 A Claude Code mod. Every few steps, a side check reads the conversation and looks for one thing
 you probably missed and that matters: a decision Claude made without saying so, a hidden
