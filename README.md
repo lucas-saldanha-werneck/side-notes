@@ -15,7 +15,7 @@ prompt. The main agent is never interrupted.
 <table>
 <tr>
 <td align="center"><img src="https://github.com/user-attachments/assets/45fc9fd1-ccfc-4ca4-a012-1c9a22d2dde4" alt="A side note above the reply" width="320"><br>A side note above the reply</td>
-<td align="center"><img src="https://github.com/user-attachments/assets/38b1ee9f-ac32-4578-978c-a238c1dff53f" alt="The same note in the desktop app" width="320"><br>The same note in the desktop app</td>
+<td align="center"><img src="https://github.com/user-attachments/assets/38b1ee9f-ac32-4578-978c-a238c1dff53f" alt="A side note above the prompt in the desktop app" width="320"><br>A side note in the desktop app</td>
 <td align="center"><img src="https://github.com/user-attachments/assets/58b88279-dfb8-4672-84f6-a07ec9794df9" alt="Chat about it with one click" width="320"><br>Chat about it with one click</td>
 </tr>
 </table>
