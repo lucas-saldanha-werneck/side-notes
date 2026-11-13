@@ -10,6 +10,16 @@ tradeoff, a result that may be wrong, or a concept you keep running into. Most o
 finds nothing and you see nothing. When it does find something, a short note shows above the
 prompt. The main agent is never interrupted.
 
+[![side-notes demo: tap to open the video](https://github.com/user-attachments/assets/3196b44e-de96-4243-853b-6e1a89578dc3)](https://lucas-saldanha-werneck.github.io/side-notes/demo.mp4)
+
+<table>
+<tr>
+<td align="center"><img src="https://github.com/user-attachments/assets/45fc9fd1-ccfc-4ca4-a012-1c9a22d2dde4" alt="A side note above the reply" width="320"><br>A side note above the reply</td>
+<td align="center"><img src="https://github.com/user-attachments/assets/38b1ee9f-ac32-4578-978c-a238c1dff53f" alt="The same note in the desktop app" width="320"><br>The same note in the desktop app</td>
+<td align="center"><img src="https://github.com/user-attachments/assets/58b88279-dfb8-4672-84f6-a07ec9794df9" alt="Chat about it with one click" width="320"><br>Chat about it with one click</td>
+</tr>
+</table>
+
 It is built for the desktop app and for the phone through Remote Control. It works where the
 built-in note feature does not, e.g. the desktop app.
 
