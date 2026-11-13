@@ -9,7 +9,7 @@ prompt. The main agent is never interrupted.
 It is built for the desktop app and for the phone through Remote Control. It works where the
 built-in note feature does not, e.g. the desktop app.
 
-## Example
+## Examples
 
 A sketch of the band above the prompt (not a screenshot):
 
@@ -54,6 +54,15 @@ come back.
 answers that note.
 
 Notes are written in the language you write in.
+
+Commands you can type at the prompt:
+
+```
+/side-notes            list the last notes
+/side-notes 2          open note 2 again in the band
+/side-notes every 10   check every 10 steps instead of 6
+/side-notes off        stop the checks (`on` starts them again)
+```
 
 ## Install
 
