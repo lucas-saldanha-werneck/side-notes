@@ -794,7 +794,7 @@ test('a terminal session driven from the phone gets the note inside the running 
   // Only once.
   const r2 = await $.tool.call({ tool: 'Read', file_path: 'b.md' } as never)
   expect(JSON.stringify(r2.context ?? [])).not.toContain('only on this Mac')
-  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: 'done', durationMs: 5, isAborted: false } as never)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '> ✦ Worth checking · only on this Mac\n\ndone', durationMs: 5, isAborted: false } as never)
   // The next phone prompt does not tell it again; a reply of 2 answers it.
   await phone($, '2')
   expect(seen[1]).toContain('knew it already')
@@ -808,6 +808,45 @@ test('a terminal session driven from the phone gets the note inside the running 
   await step($, 12)
   for (let i = 0; i < 40; i++) await settle()
   expect(forkPrompts.length).toBeGreaterThan(1)
+})
+
+test('a note the answer did not show comes back once, with a summary; a shown note counts as told', async ($, on) => {
+  const { seen } = remoteSetup(on, ['terminal'])
+  await phone($, 'fix the build')
+  await $.turn.start({ turnId: 't1', text: 'fix the build' } as never)
+  await step($, 6)
+  for (let i = 0; i < 40; i++) await settle()
+  // The note enters the running turn, but the final answer has no ✦ block.
+  const r = await $.tool.call({ tool: 'Read', file_path: 'a.md' } as never)
+  expect(JSON.stringify(r.context ?? [])).toContain('only on this Mac')
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: 'done, no note here', durationMs: 5, isAborted: false } as never)
+  // The next phone prompt tells it again, with a short summary of the text.
+  await phone($, 'thanks')
+  expect(seen[1]).toContain('only on this Mac')
+  expect(seen[1]).toContain('did not reach the person')
+  expect(seen[1]).toContain('Nothing was pushed')
+  // This time the answer shows it: told for good.
+  await $.turn.start({ turnId: 't2', text: 'thanks' } as never)
+  await $.turn.complete({ turnId: 't2', reason: 'answer', answer: '> ✦ Worth checking · only on this Mac\n\nok', durationMs: 5, isAborted: false } as never)
+  await phone($, 'and now?')
+  expect(seen[2]).not.toContain('did not reach the person')
+  expect(seen[2]).toContain('●●●●○')
+})
+
+test('a note that failed twice is not told a third time', async ($, on) => {
+  const { seen } = remoteSetup(on, ['terminal'])
+  await phone($, 'fix the build')
+  await $.turn.start({ turnId: 't1', text: 'fix the build' } as never)
+  await step($, 6)
+  for (let i = 0; i < 40; i++) await settle()
+  await $.tool.call({ tool: 'Read', file_path: 'a.md' } as never)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: 'done', durationMs: 5, isAborted: false } as never)
+  await phone($, 'again')
+  expect(seen[1]).toContain('did not reach the person')
+  await $.turn.start({ turnId: 't2', text: 'again' } as never)
+  await $.turn.complete({ turnId: 't2', reason: 'answer', answer: 'still nothing', durationMs: 5, isAborted: false } as never)
+  await phone($, 'hello')
+  expect(seen[2]).not.toContain('only on this Mac')
 })
 
 test('phone only: a note found after the last tool call is told with the next phone prompt', async ($, on) => {
@@ -903,7 +942,7 @@ test('a fresh phone session in a folder with a restored note: the note is told, 
   // The new note joins the running turn; the restored one waits behind it.
   const r = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
   expect(JSON.stringify(r.context ?? [])).toContain('writable by everyone')
-  await $.turn.complete({ turnId: 't2', reason: 'answer', answer: 'done', durationMs: 5, isAborted: false } as never)
+  await $.turn.complete({ turnId: 't2', reason: 'answer', answer: '> ✦ Worth checking · writable\n\ndone', durationMs: 5, isAborted: false } as never)
   // 3 answers the newest note told; the restored one is not told twice.
   await phone($, '3')
   expect(sent[1]).toContain('writable by everyone')

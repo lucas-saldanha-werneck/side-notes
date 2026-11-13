@@ -93,6 +93,14 @@ let toldPrompts = 0
 // Notes Claude was already asked to tell on the phone, by their text: a note
 // in the band that is not here yet goes with the next phone prompt.
 const toldLines = new Set<string>()
+// A note just handed to Claude to show: it counts as told only when the
+// turn's final answer has the ✦ block. `armed`: the turn that carries it runs.
+let shownCheck: { note: Note; armed: boolean } | null = null
+// A note whose first showing failed (no ✦ in the answer): it goes with the
+// next phone prompt, once, with a short summary. `retried` keeps the lines
+// that already had their second try.
+let retryNote: Note | null = null
+const retried = new Set<string>()
 // Options from /config, read at register.
 let optionEvery = DEFAULT_EVERY
 let optionTerminal = false
@@ -114,6 +122,9 @@ const resetPhoneState = (): void => {
   toldStage = 'offer'
   toldPrompts = 0
   toldLines.clear()
+  shownCheck = null
+  retryNote = null
+  retried.clear()
   remoteNoteToInject = null
   isLastReplyNumbered = false
 }
@@ -390,13 +401,20 @@ const explainedLines = (): string =>
     'Translate the four labels in this line into the language the person writes in (in Portuguese, for example: "conversar sobre isso", "copiar", "entendi", "dispensar"). Keep the numbers 1, 2, 3, 4.',
   ].join('\n')
 
-const phoneContext = (note: Note, isInTurn = false): string =>
+const SUMMARY_MAX = 240
+const phoneContext = (note: Note, isInTurn = false, isRetry = false): string =>
   [
     'A side check (the side-notes plugin) found one thing the person may have missed. They read this chat on a phone (Remote Control), where the note above the prompt does not show, so you are the only way it reaches them.',
     isInTurn
       ? 'Finish the step you are on and go on with the task. Write nothing about this before your last tool call. In your reply to the person at the end of this turn (the final message, after the tool calls), start it with the two lines below, each on its own:'
       : 'Start your reply with the two lines below, each on its own, then answer their message as usual:',
     ...(isInTurn ? [] : [FINAL_MESSAGE_RULE]),
+    ...(isRetry
+      ? [
+          'This note was handed to you in an earlier reply and did not reach the person: the reply had no ✦ block. Show it now, without fail. Short summary of the note, so they know what it is about (keep it in your own words, one or two sentences, in their language):',
+          `"${cap(note.explanation === '' ? note.line : note.explanation.replace(/\s+/g, ' ').trim(), SUMMARY_MAX)}"`,
+        ]
+      : []),
     phoneLines(note),
     'Do not explain the note unless they ask for it.',
   ].join('\n')
@@ -762,18 +780,22 @@ export const register: Register = (on, options) => {
     }
     // A note waiting for the phone, or any note in the band that Claude has not
     // told yet (one restored after a clear, or found while typing at the desk).
+    const retry = kind === 'bridge' ? retryNote : null
+    if (retry !== null) retryNote = null
     const waiting = kind === 'bridge' ? await takePhoneNote($).catch(() => null) : null
     const inBand = kind === 'bridge' && view !== null && !toldLines.has(view.note.line) ? view.note : null
-    const phoneNote = waiting !== null && !toldLines.has(waiting.line) ? waiting : inBand
+    const phoneNote = retry ?? (waiting !== null && !toldLines.has(waiting.line) ? waiting : inBand)
     if (phoneNote !== null) {
       const note = phoneNote
+      const isRetry = note === retry
       remoteNoteToInject = null
       toldNote = note
       toldStage = 'offer'
       toldPrompts = 0
       toldLines.add(note.line)
-      await logCheck($, -1, waiting === note ? 'told on the phone' : 'told on the phone: the note in the band').catch(() => undefined)
-      return next({ ...e, context: [...(e.context ?? []), phoneContext(note)] })
+      shownCheck = { note, armed: !isTurnRunning }
+      await logCheck($, -1, isRetry ? 'told on the phone again, with a summary' : waiting === note ? 'told on the phone' : 'told on the phone: the note in the band').catch(() => undefined)
+      return next({ ...e, context: [...(e.context ?? []), phoneContext(note, false, isRetry)] })
     }
     // Only the person's own prompts count, not a prompt from another plugin.
     // A prompt also takes the Undo row away (/side-notes undo still works).
@@ -793,6 +815,7 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       isTurnRunning = true
+      if (shownCheck !== null) shownCheck.armed = true
       if (chatTurn === 'submitted') chatTurn = 'running'
     }
     return next(e)
@@ -813,6 +836,7 @@ export const register: Register = (on, options) => {
       toldStage = 'offer'
       toldPrompts = 0
       toldLines.add(note.line)
+      shownCheck = { note, armed: true }
       await putFolder<PhoneWait>($, 'phoneWait', null).catch(() => undefined)
       await logCheck($, -1, 'told on the phone, in the running turn').catch(() => undefined)
       added.push(phoneContext(note, true))
@@ -834,6 +858,19 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return r
     isTurnRunning = false
     isLastReplyNumbered = NUMBERED_REPLY.test(e.answer ?? '')
+    // The note counts as told only if the final answer shows it (✦). If not,
+    // it comes back once with the next phone prompt.
+    if (shownCheck !== null && shownCheck.armed && e.reason === 'answer') {
+      const { note } = shownCheck
+      shownCheck = null
+      if (!(e.answer ?? '').includes('✦') && !retried.has(note.line)) {
+        retried.add(note.line)
+        retryNote = note
+        toldLines.delete(note.line)
+        if (toldNote?.line === note.line) toldNote = null
+        await logCheck($, -1, 'note not shown in the answer: it comes back once').catch(() => undefined)
+      }
+    }
     // A phone note the turn had no tool call left to carry waits for the next phone prompt.
     remoteNoteToInject = null
     // The turn ended with no tool call after the chat: send it as a prompt now.
