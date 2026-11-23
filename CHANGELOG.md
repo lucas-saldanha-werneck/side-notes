@@ -2,6 +2,11 @@
 
 All notable changes to this plugin. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.2.0 (2026-11-23)
+
+- Phone: the first line offers "chat about it" right away, like the band.
+- Phone: the numbers are the band's hotkeys everywhere: 1 learn more, 2 knew it, 3 chat about it, 4 copy, 0 dismiss; after an explanation 1 got it, 3 chat about it, 4 copy, 0 dismiss.
+
 ## 0.1.7 (2026-11-13)
 
 - Phone: a note counts as told only if the answer shows it; one retry with a summary.

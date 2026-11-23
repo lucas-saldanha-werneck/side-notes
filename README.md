@@ -39,7 +39,7 @@ The band does not show on the phone. When you drive the session from the Claude 
 Remote Control, Claude tells you the note itself, at the top of its reply:
 
 > ✦ Worth checking · The new build is only on this Mac, so a teammate will not see it yet
-> _1 learn more · 2 knew it · 3 dismiss_ ●●●●●
+> _1 learn more · 2 knew it · 3 chat about it · 4 copy · 0 dismiss_ ●●●●●
 
 The note is a block quote, so it stands apart from the rest of the reply.
 
@@ -47,7 +47,7 @@ The dots show how long the numbers still work: a number answers the note for you
 messages. While the note is open, each reply to another message starts with a short line, with
 one dot fewer per message:
 
-> ✦ 1 · 2 · 3  ●●●●○
+> ✦ 1 · 2 · 3 · 4 · 0  ●●●●○
 
 After your fifth message the line is gone, and a number is a plain message again. When
 Claude's own reply offers numbered choices (`1. ...`, `2. ...`), a number you send next answers
@@ -55,14 +55,14 @@ Claude, not the note. After a `/clear`, the numbers no longer answer a note told
 
 Reply with just the number. Reply `undo` (or `desfazer`) to take the answer back. Claude writes
 these labels in the language you write in, like the note: in Portuguese, for example,
-`✦ Vale conferir · ...` and `1 saber mais · 2 já sabia · 3 dispensar`.
+`✦ Vale conferir · ...` and `1 saber mais · 2 já sabia · 3 conversar · 4 copiar · 0 dispensar`.
 
-After `1`, the explanation ends with the same four choices the band shows under an explanation:
+The numbers are the band's hotkeys, so they mean the same on the phone and at the desk. After `1`, the explanation ends with the four choices the band shows under an explanation:
 
-> _1 chat about it · 2 copy · 3 got it · 4 dismiss_ ●●●●●
+> _1 got it · 3 chat about it · 4 copy · 0 dismiss_ ●●●●●
 
 Reply with just the number again. The count starts again at 5 here, and the short line becomes
-`✦ 1 · 2 · 3 · 4  ●●●●○`. On the phone, Copy makes Claude send the note in a code block,
+`✦ 1 · 3 · 4 · 0  ●●●●○`. On the phone, Copy makes Claude send the note in a code block,
 because the mod cannot reach the phone's clipboard, and closes the note: like Got it, it does not
 come back.
 `/side-notes <number>` sent from the phone ends with the same line, and a reply of just the number
@@ -121,7 +121,7 @@ also loads in the desktop app's local Code sessions.
   Remote Control on. The checks run there even in a terminal. A note found while Claude is still
   working is added to the running turn with its next tool result, so Claude puts it at the top of
   the reply that ends that turn. A note found after the last tool call comes with your next phone
-  prompt instead. A reply of only `1`, `2` or `3` answers the note for the next 5 prompts: Claude
+  prompt instead. A reply of only `1`, `2`, `3` or `4` answers the note for the next 5 prompts: Claude
   gets it as an answer to the note, not as a new request. `3` dismisses this note only, like the band's Dismiss: later notes keep coming
   (`/side-notes off` stops them all). Any other reply keeps the note open and uses one of the
   5 dots; the fifth one lets the note go. A terminal session you type into at the keyboard runs no checks, even with a

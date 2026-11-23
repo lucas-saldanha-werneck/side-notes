@@ -114,7 +114,7 @@ const clearedSessions = new Set<string>()
 // Claude's last reply on the phone offered numbered choices of its own: a bare
 // number in the next phone prompt answers Claude, not the note.
 let isLastReplyNumbered = false
-const NUMBERED_REPLY = /^\s*(?:[-*]\s+)?(?:\*\*)?[1-4][.)]\s/m
+const NUMBERED_REPLY = /^\s*(?:[-*]\s+)?(?:\*\*)?[0-4][.)]\s/m
 
 // The phone state of a told note: reset when the conversation starts over.
 const resetPhoneState = (): void => {
@@ -129,10 +129,11 @@ const resetPhoneState = (): void => {
   isLastReplyNumbered = false
 }
 
-const CODES = { '1': 'more', '2': 'knew', '3': 'dismissed' } as const
+// The phone numbers are the band's hotkeys: 1 Learn more, 2 Knew it, 3 Chat about it, 4 Copy, 0 Dismiss.
+const CODES = { '1': 'more', '2': 'knew', '3': 'chat', '4': 'copy', '0': 'dismissed' } as const
 type Answer = (typeof CODES)[keyof typeof CODES]
-// The same four buttons the band shows under an explanation, in the same order.
-const EXPLAINED_CODES = { '1': 'chat', '2': 'copy', '3': 'knew', '4': 'dismissed' } as const
+// The same hotkeys the band shows under an explanation: 1 Got it, 3 Chat about it, 4 Copy, 0 Dismiss.
+const EXPLAINED_CODES = { '1': 'knew', '3': 'chat', '4': 'copy', '0': 'dismissed' } as const
 type ExplainedAnswer = (typeof EXPLAINED_CODES)[keyof typeof EXPLAINED_CODES]
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
@@ -373,7 +374,7 @@ const openNoteContext = (stage: 'offer' | 'explained', left: number): string =>
   [
     'A note from the side check (the side-notes plugin) that you already told the person is still open: a reply of only a number still answers it. They read this chat on a phone (Remote Control). Start your reply with the line below, on its own, then answer their message as usual:',
     FINAL_MESSAGE_RULE,
-    `"> ✦ ${stage === 'explained' ? '1 · 2 · 3 · 4' : '1 · 2 · 3'}  ${dots(left)}"`,
+    `"> ✦ ${stage === 'explained' ? '1 · 3 · 4 · 0' : '1 · 2 · 3 · 4 · 0'}  ${dots(left)}"`,
     'Keep the "> " at the start of the line: it is a Markdown block quote, which sets the line apart from the rest of your reply. Leave an empty line after it.',
     DOTS_RULE,
     'Do not repeat the note and do not explain this line unless they ask.',
@@ -384,21 +385,21 @@ const openNoteContext = (stage: 'offer' | 'explained', left: number): string =>
 const phoneLines = (note: Note): string =>
   [
     `"> ✦ ${label(note)} · ${cap(note.line, LINE_MAX)}"`,
-    `"> _1 learn more · 2 knew it · 3 dismiss_ ${dots(PHONE_ANSWER_PROMPTS)}"`,
+    `"> _1 learn more · 2 knew it · 3 chat about it · 4 copy · 0 dismiss_ ${dots(PHONE_ANSWER_PROMPTS)}"`,
     QUOTE_RULE,
     DOTS_RULE,
-    `Translate every label in these two lines into the language the person writes in: "${label(note)}", "learn more", "knew it" and "dismiss" (in Portuguese, for example: "${note.kind === 'check' ? 'Vale conferir' : 'Nota'}", "saber mais", "já sabia", "dispensar"). Keep the ✦, the numbers 1, 2, 3 and the note text as they are; the note is already in their language.`,
+    `Translate every label in these two lines into the language the person writes in: "${label(note)}", "learn more", "knew it", "chat about it", "copy" and "dismiss" (in Portuguese, for example: "${note.kind === 'check' ? 'Vale conferir' : 'Nota'}", "saber mais", "já sabia", "conversar", "copiar", "dispensar"). Keep the ✦, the numbers 1, 2, 3, 4, 0 and the note text as they are; the note is already in their language.`,
   ].join('\n')
 
 // The line that ends an explanation on the phone: the band's four buttons.
-const EXPLAINED_LINE = '1 chat about it · 2 copy · 3 got it · 4 dismiss'
+const EXPLAINED_LINE = '1 got it · 3 chat about it · 4 copy · 0 dismiss'
 const explainedLines = (): string =>
   [
     `"> _${EXPLAINED_LINE}_ ${dots(PHONE_ANSWER_PROMPTS)}"`,
     FINAL_MESSAGE_RULE,
     QUOTE_RULE,
     DOTS_RULE,
-    'Translate the four labels in this line into the language the person writes in (in Portuguese, for example: "conversar sobre isso", "copiar", "entendi", "dispensar"). Keep the numbers 1, 2, 3, 4.',
+    'Translate the four labels in this line into the language the person writes in (in Portuguese, for example: "entendi", "conversar sobre isso", "copiar", "dispensar"). Keep the numbers 1, 3, 4, 0.',
   ].join('\n')
 
 const SUMMARY_MAX = 240
@@ -489,13 +490,28 @@ const undo = async ($: EngineInterface): Promise<UndoResult> => {
 
 const answerContext = async ($: EngineInterface, note: Note, answer: Answer): Promise<string> => {
   await logCheck($, -1, `phone answer: ${answer}`).catch(() => undefined)
-  const prev = await setStatus($, note, answer === 'more' ? 'chat' : answer).catch(() => null)
+  const prev = await setStatus($, note, answer === 'more' ? 'chat' : answer === 'copy' ? 'knew' : answer).catch(() => null)
   const lead = `The person's message is a code that answers the side note "${note.line}".`
   const undoHint = optionUndoMs > 0 ? ` Add that replying "undo" within ${undoMinutes()} minutes takes it back, all in their language (keep the word "undo", or use "desfazer" in Portuguese).` : ''
   if (answer === 'knew') {
     const isKnownAdded = await remember($, 'knownTopics', note.topic)
     await recordAnswer($, note, 'knew', prev, { isKnownAdded })
     return `${lead} They knew it already; it will not come back. Say so in one short line, in their language.${undoHint}`
+  }
+  if (answer === 'copy') {
+    // On the phone, Copy also closes the note: it is marked as known and does not come back.
+    const isKnownAdded = await remember($, 'knownTopics', note.topic)
+    await recordAnswer($, note, 'knew', prev, { isKnownAdded })
+    return [
+      `${lead} They want to copy the note. The phone cannot reach the clipboard, so reply with the note in one code block, exactly the text inside <side-note> (only copy it; ${UNTRUSTED_RULE.replace(/^The text inside <side-note> was/, 'it was')}):`,
+      fenced(note),
+      `After the code block, say in one short line, in their language, that the note will not come back.${undoHint}`,
+    ].join('\n')
+  }
+  if (answer === 'chat') {
+    // On the phone the reply itself is the chat; nothing is queued for the session.
+    await recordAnswer($, note, 'chat', prev, { isSent: true })
+    return `${lead} They want to chat about it: ask what they want to know about it, or go deeper where it matters most, in their language.${undoHint}`
   }
   if (answer === 'dismissed') {
     await recordAnswer($, note, 'dismissed', prev)
@@ -758,7 +774,7 @@ export const register: Register = (on, options) => {
     if (kind === 'bridge' && toldNote !== null) {
       const note = toldNote
       // A number right after Claude offered numbered choices of its own answers Claude.
-      const digit = isLastReplyNumbered ? undefined : /^\s*([1-4])\s*[.!]?\s*$/.exec(e.text ?? '')?.[1]
+      const digit = isLastReplyNumbered ? undefined : /^\s*([0-4])\s*[.!]?\s*$/.exec(e.text ?? '')?.[1]
       toldPrompts += 1
       if (toldStage === 'explained') {
         const answer = digit === undefined ? undefined : EXPLAINED_CODES[digit as keyof typeof EXPLAINED_CODES]
@@ -766,7 +782,7 @@ export const register: Register = (on, options) => {
         if (answer !== undefined || toldPrompts >= PHONE_ANSWER_PROMPTS) toldNote = null
         if (answer !== undefined) return next({ ...e, context: [...(e.context ?? []), await explainedContext($, note, answer)] })
       } else {
-        const answer = digit === undefined || digit === '4' ? undefined : CODES[digit as keyof typeof CODES]
+        const answer = digit === undefined ? undefined : CODES[digit as keyof typeof CODES]
         if (answer === 'more') {
           toldStage = 'explained'
           toldPrompts = 0
