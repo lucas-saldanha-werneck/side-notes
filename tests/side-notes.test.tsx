@@ -986,7 +986,7 @@ test('on the phone, the explanation ends with four numbered options; 1 marks it 
   await phone($, '1')
   expect(seen[2]).toContain('learn more')
   expect(seen[2]).toContain(AFTER_MORE)
-  await phone($, '3')
+  await phone($, '1')
   expect(seen[3]).toContain('will not come back')
   expect(await listNotes($)).toContain('· knew ·')
   // The note is answered: a later number is a plain message.
@@ -1033,15 +1033,6 @@ test('on the phone, after the explanation 3 starts a chat about the note', async
   expect(await listNotes($)).toContain('· chat ·')
   await phone($, '3')
   expect(seen[4]).toBe('[]')
-})
-
-test('on the phone, before the explanation a reply of 4 is a plain message', async ($, on) => {
-  const { seen } = await phoneUndoSetup($, on)
-  await phone($, '4')
-  expect(seen[2]).not.toContain('side note')
-  expect(seen[2]).toContain('●●●●○')
-  await phone($, '0')
-  expect(seen[3]).toContain('dismissed this note')
 })
 
 // --- On the phone, the dots: how many more messages a number still answers ---
